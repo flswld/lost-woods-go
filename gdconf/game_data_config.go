@@ -81,6 +81,8 @@ type GameDataConfig struct {
 	MonsterDataMap             map[int32]*MonsterData                  // 怪物
 	ProudSkillDataMap          map[int32]map[int32]*ProudSkillData     // 天赋
 	AvatarCurveDataMap         map[int32]*AvatarCurveData              // 角色曲线
+	WeaponCurveDataMap         map[int32]*WeaponCurveData              // 武器曲线
+	ReliquaryLevelDataMap      map[int32]map[int32]*ReliquaryLevelData // 圣遗物等级
 }
 
 func InitGameDataConfig() {
@@ -193,6 +195,8 @@ func (g *GameDataConfig) load(loadSceneLua bool) {
 	g.loadMonsterData()                // 怪物
 	g.loadProudSkillData()             // 天赋
 	g.loadAvatarCurveData()            // 角色曲线
+	g.loadWeaponCurveData()            // 武器曲线
+	g.loadReliquaryLevelData()         // 圣遗物等级
 }
 
 // CSV相关

@@ -629,8 +629,6 @@ func (g *Game) UpdatePlayerAvatarFightProp(userId uint32, avatarId uint32) {
 		logger.Error("get avatar is nil, avatarId: %v", avatarId)
 		return
 	}
-
-	// 更新角色面板
 	dbAvatar.UpdateAvatarFightProp(avatar)
 
 	avatarFightPropNotify := &proto.AvatarFightPropNotify{
