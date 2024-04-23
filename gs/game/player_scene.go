@@ -1271,10 +1271,16 @@ func (g *Game) CreateConfigEntity(scene *Scene, groupId uint32, entityConfig any
 	switch entityConfig.(type) {
 	case *gdconf.Monster:
 		monster := entityConfig.(*gdconf.Monster)
+		// TODO 怪物等级与世界等级的关联
+		worldLevel := owner.PropMap[constant.PLAYER_PROP_PLAYER_WORLD_LEVEL]
+		monsterLevel := uint8(monster.Level) * uint8(worldLevel+1)
+		if monsterLevel > 100 {
+			monsterLevel = 100
+		}
 		return scene.CreateEntityMonster(
 			&model.Vector{X: float64(monster.Pos.X), Y: float64(monster.Pos.Y), Z: float64(monster.Pos.Z)},
 			&model.Vector{X: float64(monster.Rot.X), Y: float64(monster.Rot.Y), Z: float64(monster.Rot.Z)},
-			uint32(monster.MonsterId), uint8(monster.Level), uint32(monster.ConfigId), groupId, int(monster.VisionLevel),
+			uint32(monster.MonsterId), monsterLevel, uint32(monster.ConfigId), groupId, int(monster.VisionLevel),
 		)
 	case *gdconf.Npc:
 		npc := entityConfig.(*gdconf.Npc)
@@ -1410,7 +1416,7 @@ func (g *Game) CreateMonster(player *model.Player, pos *model.Vector, monsterId 
 	rot.Y = random.GetRandomFloat64(0.0, 360.0)
 	entityId := scene.CreateEntityMonster(
 		pos, rot,
-		monsterId, uint8(random.GetRandomInt32(1, 90)),
+		monsterId, level,
 		0, 0, constant.VISION_LEVEL_NORMAL,
 	)
 	entity := scene.GetEntity(entityId)
