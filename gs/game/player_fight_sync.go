@@ -233,7 +233,17 @@ func (g *Game) handleEvtBeingHit(player *model.Player, scene *Scene, hitInfo *pr
 			return
 		}
 		logger.Debug("[EvtBeingHit] GadgetData: %+v, EntityId: %v, uid: %v", gadgetDataConfig, defEntity.GetId(), player.PlayerId)
-		// g.handleGadgetEntityBeHitLow(player, defEntity, attackResult.ElementType)
+		if gadgetDataConfig.ServerLuaScript != "" {
+			gadgetLuaConfig := gdconf.GetGadgetLuaConfigByName(gadgetDataConfig.ServerLuaScript)
+			if gadgetLuaConfig == nil {
+				logger.Error("get gadget lua config is nil, name: %v", gadgetDataConfig.ServerLuaScript)
+				return
+			}
+			isHost := player.PlayerId == scene.GetWorld().GetOwner().PlayerId
+			CallGadgetLuaFunc(gadgetLuaConfig.LuaState, "OnBeHurt",
+				&LuaCtx{uid: player.PlayerId, targetEntityId: defEntity.GetId(), groupId: defEntity.GetGroupId()},
+				attackResult.ElementType, 0, isHost)
+		}
 	}
 }
 
@@ -594,27 +604,6 @@ func (g *Game) AbilityInvocationsNotify(player *model.Player, payloadMsg pb.Mess
 	}
 	for _, entry := range ntf.Invokes {
 		g.handleAbilityInvoke(player, entry)
-		// switch entry.ArgumentType {
-		// case proto.AbilityInvokeArgument_ABILITY_META_MODIFIER_CHANGE:
-		// 	modifierChange := new(proto.AbilityMetaModifierChange)
-		// 	err := pb.Unmarshal(entry.AbilityData, modifierChange)
-		// 	if err != nil {
-		// 		logger.Error("parse AbilityMetaModifierChange error: %v", err)
-		// 		continue
-		// 	}
-		// 	// 处理耐力消耗
-		// 	g.HandleAbilityStamina(player, entry)
-		// 	g.handleGadgetEntityAbilityLow(player, entry.EntityId, entry.ArgumentType, modifierChange)
-		// case proto.AbilityInvokeArgument_ABILITY_MIXIN_COST_STAMINA:
-		// 	costStamina := new(proto.AbilityMixinCostStamina)
-		// 	err := pb.Unmarshal(entry.AbilityData, costStamina)
-		// 	if err != nil {
-		// 		logger.Error("parse AbilityMixinCostStamina error: %v", err)
-		// 		continue
-		// 	}
-		// 	// 处理耐力消耗
-		// 	g.HandleAbilityStamina(player, entry)
-		// }
 	}
 }
 
@@ -723,8 +712,6 @@ func (g *Game) EvtDoSkillSuccNotify(player *model.Player, payloadMsg pb.Message)
 	}
 
 	// logger.Debug("EvtDoSkillSuccNotify: %+v", ntf)
-	// 处理技能开始的耐力消耗
-	g.SkillStartStamina(player, ntf.CasterId, ntf.SkillId)
 	// 触发任务
 	g.TriggerQuest(player, constant.QUEST_FINISH_COND_TYPE_SKILL, "", int32(ntf.SkillId))
 	// 消耗元素能量
@@ -975,8 +962,8 @@ func (g *Game) handleAbilityInvoke(player *model.Player, entry *proto.AbilityInv
 	if entity == nil {
 		return
 	}
-	if entry.Head.LocalId != 0 {
-		logger.Debug("[LocalAbilityInvoke] type: %v, localId: %v, entityId: %v, uid: %v", entry.ArgumentType, entry.Head.LocalId, entity.GetId(), player.PlayerId)
+	logger.Debug("[LocalAbilityInvoke] type: %v, localId: %v, entityId: %v, uid: %v", entry.ArgumentType, entry.Head.LocalId, entity.GetId(), player.PlayerId)
+	if strings.Contains(entry.ArgumentType.String(), "ACTION") || entry.ArgumentType == proto.AbilityInvokeArgument_ABILITY_NONE {
 		ability := entity.GetAbility(entry.Head.InstancedAbilityId)
 		if ability == nil {
 			logger.Error("get ability is nil, instancedAbilityId: %v, entityId: %v, uid: %v", entry.Head.InstancedAbilityId, entity.GetId(), player.PlayerId)
@@ -987,157 +974,108 @@ func (g *Game) handleAbilityInvoke(player *model.Player, entry *proto.AbilityInv
 			logger.Error("get ability data config is nil, abilityName: %v", ability.abilityName)
 			return
 		}
-		if entry.ArgumentType == proto.AbilityInvokeArgument_ABILITY_NONE || strings.Contains(entry.ArgumentType.String(), "ACTION") {
-			actionDataConfig := abilityDataConfig.GetActionDataByLocalId(entry.Head.LocalId)
-			if actionDataConfig == nil {
-				logger.Error("get action data config is nil, localId: %v", entry.Head.LocalId)
-				return
-			}
-			entity.AbilityAction(actionDataConfig)
-		} else if strings.Contains(entry.ArgumentType.String(), "MIXIN") {
-			mixinDataConfig := abilityDataConfig.GetMixinDataByLocalId(entry.Head.LocalId)
-			if mixinDataConfig == nil {
-				logger.Error("get mixin data config is nil, localId: %v", entry.Head.LocalId)
-				return
-			}
-		} else {
-			logger.Error("???")
-		}
-		return
-	}
-	switch entry.ArgumentType {
-	case proto.AbilityInvokeArgument_ABILITY_META_ADD_NEW_ABILITY:
-		addAbility := new(proto.AbilityMetaAddAbility)
-		err := pb.Unmarshal(entry.AbilityData, addAbility)
-		if err != nil {
-			logger.Error("parse AbilityMetaAddAbility error: %v", err)
+		actionDataConfig := abilityDataConfig.GetActionDataByLocalId(entry.Head.LocalId)
+		if actionDataConfig == nil {
+			logger.Error("get action data config is nil, localId: %v", entry.Head.LocalId)
 			return
 		}
-		abilityNameHash := addAbility.Ability.AbilityName.GetHash()
-		if abilityNameHash == 0 {
-			logger.Debug("ability name hash is 0, ability: %+v, entityId: %v, uid: %v", addAbility.Ability, entity.GetId(), player.PlayerId)
+		entity.AbilityAction(ability, actionDataConfig, entity)
+	} else if strings.Contains(entry.ArgumentType.String(), "MIXIN") {
+		ability := entity.GetAbility(entry.Head.InstancedAbilityId)
+		if ability == nil {
+			logger.Error("get ability is nil, instancedAbilityId: %v, entityId: %v, uid: %v", entry.Head.InstancedAbilityId, entity.GetId(), player.PlayerId)
 			return
 		}
-		abilityDataConfig := gdconf.GetAbilityDataByHash(abilityNameHash)
+		abilityDataConfig := gdconf.GetAbilityDataByName(ability.abilityName)
 		if abilityDataConfig == nil {
-			logger.Error("get abilityDataConfig is nil, abilityNameHash: %v", abilityNameHash)
+			logger.Error("get ability data config is nil, abilityName: %v", ability.abilityName)
 			return
 		}
-		entity.AddAbility(abilityDataConfig.AbilityName, addAbility.Ability.InstancedAbilityId)
-	case proto.AbilityInvokeArgument_ABILITY_META_MODIFIER_CHANGE:
-		modifierChange := new(proto.AbilityMetaModifierChange)
-		err := pb.Unmarshal(entry.AbilityData, modifierChange)
-		if err != nil {
-			logger.Error("parse AbilityMetaModifierChange error: %v", err)
+		mixinDataConfig := abilityDataConfig.GetMixinDataByLocalId(entry.Head.LocalId)
+		if mixinDataConfig == nil {
+			logger.Error("get mixin data config is nil, localId: %v", entry.Head.LocalId)
 			return
 		}
-		if modifierChange.Action == proto.ModifierAction_ADDED {
+		entity.AbilityMixin(ability, mixinDataConfig, entity)
+	} else if strings.Contains(entry.ArgumentType.String(), "META") {
+		switch entry.ArgumentType {
+		case proto.AbilityInvokeArgument_ABILITY_META_ADD_NEW_ABILITY:
+			addAbility := new(proto.AbilityMetaAddAbility)
+			err := pb.Unmarshal(entry.AbilityData, addAbility)
+			if err != nil {
+				logger.Error("parse AbilityMetaAddAbility error: %v", err)
+				return
+			}
+			abilityNameHash := addAbility.Ability.AbilityName.GetHash()
+			if abilityNameHash == 0 {
+				logger.Error("ability name hash is 0, ability: %+v, entityId: %v, uid: %v", addAbility.Ability, entity.GetId(), player.PlayerId)
+				return
+			}
+			abilityDataConfig := gdconf.GetAbilityDataByHash(abilityNameHash)
+			if abilityDataConfig == nil {
+				logger.Error("get abilityDataConfig is nil, abilityNameHash: %v", abilityNameHash)
+				return
+			}
+			entity.AddAbility(abilityDataConfig.AbilityName, addAbility.Ability.InstancedAbilityId)
+		case proto.AbilityInvokeArgument_ABILITY_META_MODIFIER_CHANGE:
+			modifierChange := new(proto.AbilityMetaModifierChange)
+			err := pb.Unmarshal(entry.AbilityData, modifierChange)
+			if err != nil {
+				logger.Error("parse AbilityMetaModifierChange error: %v", err)
+				return
+			}
+			if modifierChange.Action == proto.ModifierAction_ADDED {
+				ability := entity.GetAbility(entry.Head.InstancedAbilityId)
+				if ability == nil {
+					logger.Error("get ability is nil, instancedAbilityId: %v, entityId: %v, uid: %v", entry.Head.InstancedAbilityId, entity.GetId(), player.PlayerId)
+					return
+				}
+				entity.AddModifier(ability, entry.Head.InstancedModifierId, uint32(entry.Head.ModifierConfigLocalId))
+			} else if modifierChange.Action == proto.ModifierAction_REMOVED {
+				entity.RemoveModifier(entry.Head.InstancedModifierId)
+			}
+		case proto.AbilityInvokeArgument_ABILITY_META_REINIT_OVERRIDEMAP:
+			reInitOverrideMap := new(proto.AbilityMetaReInitOverrideMap)
+			err := pb.Unmarshal(entry.AbilityData, reInitOverrideMap)
+			if err != nil {
+				logger.Error("parse AbilityMetaReInitOverrideMap error: %v", err)
+				return
+			}
 			ability := entity.GetAbility(entry.Head.InstancedAbilityId)
 			if ability == nil {
 				logger.Error("get ability is nil, instancedAbilityId: %v, entityId: %v, uid: %v", entry.Head.InstancedAbilityId, entity.GetId(), player.PlayerId)
 				return
 			}
-			entity.AddModifier(ability, entry.Head.InstancedModifierId, uint32(entry.Head.ModifierConfigLocalId))
-		} else if modifierChange.Action == proto.ModifierAction_REMOVED {
-			entity.RemoveModifier(entry.Head.InstancedModifierId)
+			for _, abilityScalarValueEntry := range reInitOverrideMap.OverrideMap {
+				if abilityScalarValueEntry.ValueType != proto.AbilityScalarType_ABILITY_SCALAR_TYPE_FLOAT {
+					logger.Error("override param type not support, type: %v, uid: %v", abilityScalarValueEntry.ValueType, player.PlayerId)
+					return
+				}
+				key := abilityScalarValueEntry.Key.GetHash()
+				value := abilityScalarValueEntry.Value.(*proto.AbilityScalarValueEntry_FloatValue).FloatValue
+				ability.abilitySpecialOverrideMap[key] = value
+			}
+		case proto.AbilityInvokeArgument_ABILITY_META_OVERRIDE_PARAM:
+			abilityScalarValueEntry := new(proto.AbilityScalarValueEntry)
+			err := pb.Unmarshal(entry.AbilityData, abilityScalarValueEntry)
+			if err != nil {
+				logger.Error("parse AbilityScalarValueEntry error: %v", err)
+				return
+			}
+			ability := entity.GetAbility(entry.Head.InstancedAbilityId)
+			if ability == nil {
+				logger.Error("get ability is nil, instancedAbilityId: %v, entityId: %v, uid: %v", entry.Head.InstancedAbilityId, entity.GetId(), player.PlayerId)
+				return
+			}
+			if abilityScalarValueEntry.ValueType != proto.AbilityScalarType_ABILITY_SCALAR_TYPE_FLOAT {
+				logger.Error("override param type not support, type: %v, uid: %v", abilityScalarValueEntry.ValueType, player.PlayerId)
+				return
+			}
+			key := abilityScalarValueEntry.Key.GetHash()
+			value := abilityScalarValueEntry.Value.(*proto.AbilityScalarValueEntry_FloatValue).FloatValue
+			ability.abilitySpecialOverrideMap[key] = value
 		}
-	}
-}
-
-// TODO 一些很low的解决方案 我本来是不想写的 有多low？要多low有多low！
-
-func (g *Game) handleGadgetEntityBeHitLow(player *model.Player, entity IEntity, hitElementType uint32) {
-	world := WORLD_MANAGER.GetWorldById(player.WorldId)
-	if world == nil {
-		return
-	}
-	scene := world.GetSceneById(player.GetSceneId())
-	iGadgetEntity, ok := entity.(IGadgetEntity)
-	if !ok {
-		return
-	}
-	gadgetId := iGadgetEntity.GetGadgetId()
-	gadgetDataConfig := gdconf.GetGadgetDataById(int32(gadgetId))
-	if gadgetDataConfig == nil {
-		logger.Error("get gadget data config is nil, gadgetId: %v", iGadgetEntity.GetGadgetId())
-		return
-	}
-	if strings.Contains(gadgetDataConfig.Name, "火把") ||
-		strings.Contains(gadgetDataConfig.Name, "火盆") ||
-		strings.Contains(gadgetDataConfig.Name, "篝火") {
-		// 火把点燃
-		if hitElementType != constant.ELEMENT_TYPE_FIRE {
-			return
-		}
-		g.ChangeGadgetState(player, entity.GetId(), constant.GADGET_STATE_GEAR_START)
-	} else if strings.Contains(gadgetDataConfig.ServerLuaScript, "Controller") {
-		// 元素方碑点亮
-		gadgetElementType := uint32(0)
-		if strings.Contains(gadgetDataConfig.ServerLuaScript, "Fire") {
-			gadgetElementType = constant.ELEMENT_TYPE_FIRE
-		} else if strings.Contains(gadgetDataConfig.ServerLuaScript, "Water") {
-			gadgetElementType = constant.ELEMENT_TYPE_WATER
-		} else if strings.Contains(gadgetDataConfig.ServerLuaScript, "Grass") {
-			gadgetElementType = constant.ELEMENT_TYPE_GRASS
-		} else if strings.Contains(gadgetDataConfig.ServerLuaScript, "Elec") {
-			gadgetElementType = constant.ELEMENT_TYPE_ELEC
-		} else if strings.Contains(gadgetDataConfig.ServerLuaScript, "Ice") {
-			gadgetElementType = constant.ELEMENT_TYPE_ICE
-		} else if strings.Contains(gadgetDataConfig.ServerLuaScript, "Wind") {
-			gadgetElementType = constant.ELEMENT_TYPE_WIND
-		} else if strings.Contains(gadgetDataConfig.ServerLuaScript, "Rock") {
-			gadgetElementType = constant.ELEMENT_TYPE_ROCK
-		}
-		if hitElementType != gadgetElementType {
-			return
-		}
-		g.ChangeGadgetState(player, entity.GetId(), constant.GADGET_STATE_GEAR_START)
-	} else if strings.Contains(gadgetDataConfig.ServerLuaScript, "SubfieldDrop_WoodenObject_Broken") {
-		// 木箱破碎
-		g.KillEntity(player, scene, entity.GetId(), proto.PlayerDieType_PLAYER_DIE_GM)
-	} else if strings.Contains(gadgetDataConfig.ServerLuaScript, "Gear_MovingTarget") {
-		g.ChangeGadgetState(player, entity.GetId(), constant.GADGET_STATE_ACTION01)
-		g.KillEntity(player, scene, entity.GetId(), proto.PlayerDieType_PLAYER_DIE_NONE)
-	}
-}
-
-func (g *Game) handleGadgetEntityAbilityLow(player *model.Player, entityId uint32, argument proto.AbilityInvokeArgument, entry pb.Message) {
-	world := WORLD_MANAGER.GetWorldById(player.WorldId)
-	if world == nil {
-		return
-	}
-	scene := world.GetSceneById(player.GetSceneId())
-	entity := scene.GetEntity(entityId)
-	if entity == nil {
-		return
-	}
-	switch argument {
-	case proto.AbilityInvokeArgument_ABILITY_META_MODIFIER_CHANGE:
-		// 物件破碎
-		modifierChange := entry.(*proto.AbilityMetaModifierChange)
-		if modifierChange.Action != proto.ModifierAction_REMOVED {
-			return
-		}
-		iGadgetEntity, ok := entity.(IGadgetEntity)
-		if !ok {
-			return
-		}
-		gadgetId := iGadgetEntity.GetGadgetId()
-		if gadgetId == 0 {
-			return
-		}
-		gadgetDataConfig := gdconf.GetGadgetDataById(int32(gadgetId))
-		if gadgetDataConfig == nil {
-			logger.Error("get gadget data config is nil, gadgetId: %v", iGadgetEntity.GetGadgetId())
-			return
-		}
-		if strings.Contains(gadgetDataConfig.Name, "碎石堆") ||
-			strings.Contains(gadgetDataConfig.ServerLuaScript, "SubfieldDrop_WoodenObject_Broken") {
-			logger.Debug("物件破碎, entityId: %v, modifierChange: %v, uid: %v", entityId, modifierChange, player.PlayerId)
-			g.KillEntity(player, scene, entity.GetId(), proto.PlayerDieType_PLAYER_DIE_GM)
-		} else if strings.Contains(gadgetDataConfig.ServerLuaScript, "SubfieldDrop_Ore") {
-			g.KillEntity(player, scene, entity.GetId(), proto.PlayerDieType_PLAYER_DIE_GM)
-			g.CreateDropGadget(player, entity.GetPos(), 70600031, 104011, 1)
-		}
+	} else {
+		logger.Error("???")
 	}
 }
