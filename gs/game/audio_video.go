@@ -20,13 +20,26 @@ import (
 )
 
 const (
-	KeyOffset = -12 * 1 // 八度修正偏移
+	KeyOffset              = -12 * 1 // 八度修正偏移
+	MidiInputDevPortNumber = 0
 )
 
-var AUDIO_CHAN chan uint32
+var (
+	AudioChan               = make(chan uint32, 1000)
+	MidiInputDevStop func() = nil
+)
 
-func init() {
-	AUDIO_CHAN = make(chan uint32, 1000)
+func sendMidiMsg(msg midi.Message) {
+	var channel, key, velocity uint8
+	if !msg.GetNoteStart(&channel, &key, &velocity) {
+		return
+	}
+	// 60 -> 中央C C4
+	note := int32(key) + int32(KeyOffset)
+	if note < 36 || note > 96 {
+		return
+	}
+	AudioChan <- uint32(note)
 }
 
 func PlayAudio(fileData []byte) {
@@ -45,41 +58,17 @@ func PlayAudio(fileData []byte) {
 	metricTicks := audio.TimeFormat.(smf.MetricTicks)
 	tickTime := ((60000000.0 / tempoChange.BPM) / float64(metricTicks.Resolution())) / 1000.0
 	logger.Debug("start play audio")
+	// 全部轨道
 	for _, track := range audio.Tracks {
-		// 全部轨道
-		totalTick := uint64(0)
-		for _, event := range track {
-			// 单个轨道
-			delay := uint32(float64(event.Delta) * tickTime)
-			// busyPollWaitMilliSecond(delay)
-			interruptWaitMilliSecond(delay)
-			totalTick += uint64(delay)
-
-			msg := event.Message
-			if msg.Type() != midi.NoteOnMsg {
-				continue
+		// 单个轨道
+		go func(track smf.Track) {
+			for _, event := range track {
+				delay := uint32(float64(event.Delta) * tickTime)
+				// busyPollWaitMilliSecond(delay)
+				interruptWaitMilliSecond(delay)
+				sendMidiMsg(midi.Message(event.Message))
 			}
-			midiMsg := midi.Message(msg)
-			var channel, key, velocity uint8
-			midiMsg.GetNoteOn(&channel, &key, &velocity)
-			// TODO 测试一下客户端是否支持更宽的音域
-			// 60 -> 中央C C4
-			// if key < 36 || key > 71 {
-			// 	continue
-			// }
-			note := int32(key) + int32(KeyOffset)
-			if note < 21 || note > 108 {
-				// 非88键钢琴音域
-				continue
-			}
-			if velocity == 0 {
-				// 可能是NoteOffMsg
-				continue
-			}
-
-			AUDIO_CHAN <- uint32(note)
-			// logger.Debug("send midi note: %v, delay: %v, totalTick: %v", note, delay, totalTick)
-		}
+		}(track)
 	}
 }
 
@@ -98,11 +87,33 @@ func busyPollWaitMilliSecond(delay uint32) {
 	}
 }
 
+func StartMidiInputDev() error {
+	logger.Info("midi input dev port: %v", midi.GetInPorts())
+	in, err := midi.InPort(MidiInputDevPortNumber)
+	if err != nil {
+		return err
+	}
+	MidiInputDevStop, err = midi.ListenTo(in, func(msg midi.Message, timestampms int32) {
+		logger.Debug("midi input dev msg: %v", msg)
+		sendMidiMsg(msg)
+	})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func StopMidiInputDev() {
+	MidiInputDevStop()
+	midi.CloseDriver()
+}
+
 const (
 	SCREEN_WIDTH  = 80
 	SCREEN_HEIGHT = 80
 	SCREEN_DPI    = 0.5
 )
+
 const GADGET_ID = 70590015
 
 var SCREEN_ENTITY_ID_LIST []uint32
@@ -118,6 +129,7 @@ const (
 	GADGET_CYAN_BLUE = 70590018
 	GADGET_PURPLE    = 70590020
 )
+
 const (
 	RED_RGB       = "C3764F"
 	GREEN_RGB     = "559F30"
@@ -137,6 +149,7 @@ var COLOR_GADGET_MAP = map[string]int{
 	CYAN_BLUE_RGB: GADGET_CYAN_BLUE,
 	PURPLE_RGB:    GADGET_PURPLE,
 }
+
 var ALL_COLOR = []string{RED_RGB, GREEN_RGB, BLUE_RGB, CYAN_RGB, YELLOW_RGB, CYAN_BLUE_RGB, PURPLE_RGB}
 
 type ColorLight struct {
