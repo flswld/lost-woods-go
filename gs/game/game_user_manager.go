@@ -2,6 +2,7 @@ package game
 
 import (
 	"context"
+	"hk4e/common/config"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -23,22 +24,28 @@ import (
 // 玩家定时保存 写入db和redis
 
 type UserManager struct {
-	db                  *dao.Dao                 // db对象
-	playerMap           map[uint32]*model.Player // 内存玩家数据
-	saveUserChan        chan *SaveUserData       // 用于主协程发送玩家数据给定时保存协程
-	remotePlayerMap     map[uint32]string        // 远程玩家 key:userId value:玩家所在gs的appid
-	remotePlayerMapLock sync.RWMutex
+	db                     *dao.Dao                  // db对象
+	playerMap              map[uint32]*model.Player  // 内存玩家数据
+	saveUserChan           chan *SaveUserData        // 用于主协程发送玩家数据给定时保存协程
+	remotePlayerMap        map[uint32]string         // 远程玩家 key:userId value:玩家所在gs的appid
+	remotePlayerMapLock    sync.RWMutex              // 远程玩家读写锁
+	asyncWriteDbChan       chan func(u *UserManager) // 异步写入db队列
+	mockRedisPlayerMap     map[uint32]*model.Player
+	mockRedisPlayerMapLock sync.Mutex
 }
 
 func NewUserManager(db *dao.Dao) (r *UserManager) {
 	r = new(UserManager)
 	r.db = db
 	r.playerMap = make(map[uint32]*model.Player)
-	r.saveUserChan = make(chan *SaveUserData, 1)
+	r.saveUserChan = make(chan *SaveUserData, 100)
 	r.remotePlayerMap = make(map[uint32]string)
-	go r.saveUserHandle()
+	r.asyncWriteDbChan = make(chan func(u *UserManager), 100)
+	r.mockRedisPlayerMap = make(map[uint32]*model.Player)
+	r.saveUserHandle()
 	r.syncRemotePlayerMap()
-	go r.autoSyncRemotePlayerMap()
+	r.autoSyncRemotePlayerMap()
+	r.asyncWriteDbHandle()
 	return r
 }
 
@@ -111,20 +118,22 @@ func (u *UserManager) UserLoginLoad(userId uint32, clientSeq uint32, gateAppId s
 		u.DeleteUser(userId)
 	}
 	go func() {
-		// 加离线玩家数据分布式锁
-		ok := u.db.DistLockSync(userId)
-		if !ok {
-			logger.Error("lock redis offline player data error, uid: %v", userId)
-			LOCAL_EVENT_MANAGER.GetLocalEventChan() <- &LocalEvent{
-				EventId: UserLoginLoadFromDbFinish,
-				Msg: &PlayerLoginInfo{
-					UserId:    userId,
-					ClientSeq: clientSeq,
-					GateAppId: gateAppId,
-					Ok:        false,
-				},
+		if !config.GetConfig().Hk4e.StandaloneModeEnable {
+			// 加离线玩家数据分布式锁
+			ok := u.db.DistLockSync(userId)
+			if !ok {
+				logger.Error("lock redis offline player data error, uid: %v", userId)
+				LOCAL_EVENT_MANAGER.GetLocalEventChan() <- &LocalEvent{
+					EventId: UserLoginLoadFromDbFinish,
+					Msg: &PlayerLoginInfo{
+						UserId:    userId,
+						ClientSeq: clientSeq,
+						GateAppId: gateAppId,
+						Ok:        false,
+					},
+				}
+				return
 			}
-			return
 		}
 		player, err := u.LoadUserFromDbSync(userId)
 		if err != nil {
@@ -138,8 +147,10 @@ func (u *UserManager) UserLoginLoad(userId uint32, clientSeq uint32, gateAppId s
 					Ok:        false,
 				},
 			}
-			// 解离线玩家数据分布式锁
-			u.db.DistUnlock(userId)
+			if !config.GetConfig().Hk4e.StandaloneModeEnable {
+				// 解离线玩家数据分布式锁
+				u.db.DistUnlock(userId)
+			}
 			return
 		}
 		if player != nil {
@@ -162,8 +173,10 @@ func (u *UserManager) UserLoginLoad(userId uint32, clientSeq uint32, gateAppId s
 				Ok:        true,
 			},
 		}
-		// 解离线玩家数据分布式锁
-		u.db.DistUnlock(userId)
+		if !config.GetConfig().Hk4e.StandaloneModeEnable {
+			// 解离线玩家数据分布式锁
+			u.db.DistUnlock(userId)
+		}
 	}()
 }
 
@@ -209,7 +222,9 @@ func (u *UserManager) UserOfflineSave(player *model.Player, changeGsInfo *Change
 		return
 	}
 	if player.OfflineClear {
-		go u.DeleteUserAllChatMsgToDbSync(player.PlayerId)
+		u.AsyncWriteDb(func(u *UserManager) {
+			u.DeleteUserAllChatMsgToDbSync(player.PlayerId)
+		})
 		newPlayer := GAME.CreatePlayer(player.PlayerId)
 		newPlayer.DbState = player.DbState
 		player = newPlayer
@@ -332,11 +347,13 @@ func (u *UserManager) ChangeUserDbState(player *model.Player, state int) {
 // 远程玩家相关操作
 
 func (u *UserManager) autoSyncRemotePlayerMap() {
-	ticker := time.NewTicker(time.Second * 60)
-	for {
-		<-ticker.C
-		u.syncRemotePlayerMap()
-	}
+	go func() {
+		ticker := time.NewTicker(time.Second * 60)
+		for {
+			<-ticker.C
+			u.syncRemotePlayerMap()
+		}
+	}()
 }
 
 func (u *UserManager) syncRemotePlayerMap() {
@@ -479,11 +496,13 @@ func (u *UserManager) LoadTempOfflineUser(userId uint32, lock bool) *model.Playe
 		return nil
 	}
 	if lock {
-		// 加离线玩家数据分布式锁
-		ok := u.db.DistLockSync(userId)
-		if !ok {
-			logger.Error("lock redis offline player data error, uid: %v", userId)
-			return nil
+		if !config.GetConfig().Hk4e.StandaloneModeEnable {
+			// 加离线玩家数据分布式锁
+			ok := u.db.DistLockSync(userId)
+			if !ok {
+				logger.Error("lock redis offline player data error, uid: %v", userId)
+				return nil
+			}
 		}
 	}
 	player = u.LoadUserFromRedisSync(userId)
@@ -521,15 +540,19 @@ func (u *UserManager) SaveTempOfflineUser(player *model.Player) {
 	playerData, err := msgpack.Marshal(player)
 	if err != nil {
 		logger.Error("marshal player data error: %v", err)
-		// 解离线玩家数据分布式锁
-		u.db.DistUnlock(player.PlayerId)
+		if !config.GetConfig().Hk4e.StandaloneModeEnable {
+			// 解离线玩家数据分布式锁
+			u.db.DistUnlock(player.PlayerId)
+		}
 		return
 	}
 	go func() {
-		defer func() {
-			// 解离线玩家数据分布式锁
-			u.db.DistUnlock(player.PlayerId)
-		}()
+		if !config.GetConfig().Hk4e.StandaloneModeEnable {
+			defer func() {
+				// 解离线玩家数据分布式锁
+				u.db.DistUnlock(player.PlayerId)
+			}()
+		}
 		playerCopy := new(model.Player)
 		err := msgpack.Unmarshal(playerData, playerCopy)
 		if err != nil {
@@ -808,14 +831,48 @@ func (u *UserManager) DeleteUserAllChatMsgToDbSync(uid uint32) {
 }
 
 func (u *UserManager) LoadUserFromRedisSync(userId uint32) *model.Player {
-	player := u.db.GetRedisPlayer(userId)
-	return player
+	if !config.GetConfig().Hk4e.StandaloneModeEnable {
+		player := u.db.GetRedisPlayer(userId)
+		return player
+	} else {
+		u.mockRedisPlayerMapLock.Lock()
+		player := u.mockRedisPlayerMap[userId]
+		u.mockRedisPlayerMapLock.Unlock()
+		return player
+	}
 }
 
 func (u *UserManager) SaveUserToRedisSync(player *model.Player) {
-	u.db.SetRedisPlayer(player)
+	if !config.GetConfig().Hk4e.StandaloneModeEnable {
+		u.db.SetRedisPlayer(player)
+	} else {
+		u.mockRedisPlayerMapLock.Lock()
+		u.mockRedisPlayerMap[player.PlayerId] = player
+		u.mockRedisPlayerMapLock.Unlock()
+	}
 }
 
 func (u *UserManager) SaveUserListToRedisSync(setPlayerList []*model.Player) {
-	u.db.SetRedisPlayerList(setPlayerList)
+	if !config.GetConfig().Hk4e.StandaloneModeEnable {
+		u.db.SetRedisPlayerList(setPlayerList)
+	} else {
+		u.mockRedisPlayerMapLock.Lock()
+		for _, player := range setPlayerList {
+			u.mockRedisPlayerMap[player.PlayerId] = player
+		}
+		u.mockRedisPlayerMapLock.Unlock()
+	}
+}
+
+func (u *UserManager) AsyncWriteDb(fn func(u *UserManager)) {
+	u.asyncWriteDbChan <- fn
+}
+
+func (u *UserManager) asyncWriteDbHandle() {
+	go func() {
+		for {
+			fn := <-u.asyncWriteDbChan
+			fn(u)
+		}
+	}()
 }
