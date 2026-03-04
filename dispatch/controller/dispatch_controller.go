@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"strconv"
 	"time"
 
 	"hk4e/common/config"
@@ -67,7 +68,7 @@ func GetRegionList(ec2b *random.Ec2b) *proto.QueryRegionListHttpRsp {
 	regionList.ClientSecretKey = dispatchEc2bData // 客户端使用密钥
 	dispatchXorKey := ec2b.XorKey()
 	clientCustomConfig, _ := json.Marshal(&ClientCustomConfig{
-		SdkEnv:         "2",
+		SdkEnv:         strconv.Itoa(int(config.GetConfig().Hk4e.SdkEnv)),
 		CheckDevice:    false,
 		LoadPatch:      false,
 		ShowException:  false,
@@ -123,7 +124,7 @@ func GetRegionCurr(ec2b *random.Ec2b, gateServerAddr *api.GateServerAddr, stopSe
 	endec.Xor(regionCustomConfig, dispatchXorKey)
 	regionCurr.RegionCustomConfigEncrypted = regionCustomConfig // 加密后的区服定义的配置
 	clientCustomConfig, _ := json.Marshal(&ClientCustomConfig{
-		SdkEnv:         "2",
+		SdkEnv:         strconv.Itoa(int(config.GetConfig().Hk4e.SdkEnv)),
 		CheckDevice:    false,
 		LoadPatch:      false,
 		ShowException:  true,

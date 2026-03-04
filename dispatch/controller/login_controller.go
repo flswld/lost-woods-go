@@ -224,7 +224,15 @@ func (c *Controller) v2Login(ctx *gin.Context) {
 	}
 	responseData := api.NewComboTokenRsp()
 	account, err := c.db.QuerySdkAccountByField("account_id", uid)
-	if account == nil || account.Token != loginData.Token {
+	if account == nil {
+		logger.Error("account not exist, account id: %v", uid)
+		responseData.Retcode = -201
+		responseData.Message = "账号不存在"
+		ctx.JSON(http.StatusOK, responseData)
+		return
+	}
+	if account.Token != loginData.Token {
+		logger.Error("token not match, account token: %v, client token: %v", account.Token, loginData.Token)
 		responseData.Retcode = -201
 		responseData.Message = "token错误"
 		ctx.JSON(http.StatusOK, responseData)

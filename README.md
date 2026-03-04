@@ -44,7 +44,6 @@ make dev_tool
 ```shell
 make gen_natsrpc      # 生成natsrpc协议
 make gen_proto        # 生成客户端协议
-make gen_client_proto # 生成客户端协议代理(非必要 详见gate/client_proto/README.md)
 ```
 
 * 构建

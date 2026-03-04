@@ -322,23 +322,14 @@ func (w *World) GetMpLevelEntityId() uint32 {
 }
 
 func (w *World) GetNextWorldEntityId(entityType uint8) uint32 {
-	for {
-		w.entityIdCounter++
-		ret := (uint32(entityType) << 24) + w.entityIdCounter
-		reTry := false
-		for _, scene := range w.sceneMap {
-			_, exist := scene.entityMap[ret]
-			if exist {
-				reTry = true
-				break
-			}
-		}
-		if reTry {
-			continue
-		} else {
-			return ret
-		}
+	w.entityIdCounter++
+	entityId := uint32(0)
+	if w.GetOwner().ClientVersion >= 600 {
+		entityId = (uint32(entityType) << 22) + w.entityIdCounter
+	} else {
+		entityId = (uint32(entityType) << 24) + w.entityIdCounter
 	}
+	return entityId
 }
 
 // GetPlayerPeerId 获取当前玩家世界内编号

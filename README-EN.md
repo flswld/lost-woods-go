@@ -45,7 +45,6 @@ make dev_tool
 ```shell
 make gen_natsrpc      # Generate natsrpc protocol
 make gen_proto        # Generate client protocol
-make gen_client_proto # Generate client proxy protocol(not very necessary, for further information: gate/client_proto/README.md)
 ```
 
 * Compile

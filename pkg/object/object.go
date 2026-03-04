@@ -5,6 +5,8 @@ import (
 	"encoding/gob"
 	"fmt"
 
+	"github.com/golang/protobuf/jsonpb"
+	"github.com/jhump/protoreflect/dynamic"
 	"google.golang.org/protobuf/encoding/protojson"
 	pb "google.golang.org/protobuf/proto"
 )
@@ -39,18 +41,43 @@ func DeepUnmarshal(dst any, data []byte) error {
 	return nil
 }
 
-func CopyProtoBufSameField(dst, src pb.Message) error {
-	data, err := protojson.MarshalOptions{
-		UseEnumNumbers: true,
-	}.Marshal(src)
-	if err != nil {
-		return err
+func CopyProtoMsgSameField(dst, src any) error {
+	var data []byte = nil
+	switch src.(type) {
+	case pb.Message:
+		var err error = nil
+		data, err = protojson.MarshalOptions{
+			UseEnumNumbers: true,
+		}.Marshal(src.(pb.Message))
+		if err != nil {
+			return err
+		}
+	case *dynamic.Message:
+		var err error = nil
+		data, err = src.(*dynamic.Message).MarshalJSONPB(&jsonpb.Marshaler{
+			EnumsAsInts: true,
+		})
+		if err != nil {
+			return err
+		}
 	}
-	err = protojson.UnmarshalOptions{
-		DiscardUnknown: true,
-	}.Unmarshal(data, dst)
-	if err != nil {
-		return err
+	switch dst.(type) {
+	case pb.Message:
+		var err error = nil
+		err = protojson.UnmarshalOptions{
+			DiscardUnknown: true,
+		}.Unmarshal(data, dst.(pb.Message))
+		if err != nil {
+			return err
+		}
+	case *dynamic.Message:
+		var err error = nil
+		err = dst.(*dynamic.Message).UnmarshalJSONPB(&jsonpb.Unmarshaler{
+			AllowUnknownFields: true,
+		}, data)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

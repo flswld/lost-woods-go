@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"hk4e/common/config"
-	"hk4e/gate/client_proto"
 	hk4egatenet "hk4e/gate/net"
 	"hk4e/protocol/cmd"
 	"hk4e/protocol/proto"
@@ -22,7 +21,7 @@ type Session struct {
 	SendChan               chan *hk4egatenet.ProtoMsg
 	RecvChan               chan *hk4egatenet.ProtoMsg
 	ServerCmdProtoMap      *cmd.CmdProtoMap
-	ClientCmdProtoMap      *client_proto.ClientCmdProtoMap
+	ClientProtoProxy       *hk4egatenet.ClientProtoProxy
 	ClientSeq              uint32
 	DeadEvent              chan struct{}
 	ClientVersionRandomKey string
@@ -48,7 +47,6 @@ func NewSession(gateAddr string, dispatchKey []byte) (*Session, error) {
 		SendChan:               make(chan *hk4egatenet.ProtoMsg, 1000),
 		RecvChan:               make(chan *hk4egatenet.ProtoMsg, 1000),
 		ServerCmdProtoMap:      cmd.NewCmdProtoMap(),
-		ClientCmdProtoMap:      nil,
 		ClientSeq:              0,
 		DeadEvent:              make(chan struct{}),
 		ClientVersionRandomKey: "",
@@ -56,7 +54,7 @@ func NewSession(gateAddr string, dispatchKey []byte) (*Session, error) {
 		Uid:                    0,
 	}
 	if config.GetConfig().Hk4e.ClientProtoProxyEnable {
-		r.ClientCmdProtoMap = client_proto.NewClientCmdProtoMap()
+		r.ClientProtoProxy = hk4egatenet.NewClientProtoProxy(config.GetConfig().Hk4e.ClientProtoDir)
 	}
 	go r.recvHandle()
 	go r.sendHandle()
@@ -78,7 +76,7 @@ func (s *Session) SendMsg(cmdId uint16, msg pb.Message) {
 
 func (s *Session) Close() {
 	s.CloseOnce.Do(func() {
-		_ = s.Conn.Close(kcp.EnetClientClose)
+		_ = s.Conn.Close()
 		close(s.DeadEvent)
 	})
 }
@@ -100,7 +98,7 @@ func (s *Session) recvHandle() {
 		kcpMsgList := make([]*hk4egatenet.KcpMsg, 0)
 		hk4egatenet.DecodeBinToPayload(recvData, convId, &kcpMsgList, s.XorKey)
 		for _, v := range kcpMsgList {
-			protoMsgList := hk4egatenet.ProtoDecode(v, s.ServerCmdProtoMap, s.ClientCmdProtoMap)
+			protoMsgList := hk4egatenet.ProtoDecode(v, s.ServerCmdProtoMap, s.ClientProtoProxy)
 			for _, vv := range protoMsgList {
 				s.RecvChan <- vv
 			}
@@ -119,7 +117,7 @@ func (s *Session) sendHandle() {
 			s.Close()
 			break
 		}
-		kcpMsg := hk4egatenet.ProtoEncode(protoMsg, s.ServerCmdProtoMap, s.ClientCmdProtoMap)
+		kcpMsg := hk4egatenet.ProtoEncode(protoMsg, s.ServerCmdProtoMap, s.ClientProtoProxy)
 		if kcpMsg == nil {
 			logger.Error("decode kcp msg is nil, convId: %v", convId)
 			continue

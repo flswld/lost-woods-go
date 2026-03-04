@@ -218,7 +218,11 @@ type CommonLuaTableParam struct {
 
 func GetEntityType(luaState *lua.LState) int {
 	entityId := luaState.ToInt(1)
-	luaState.Push(lua.LNumber(entityId >> 24))
+	if SELF.ClientVersion >= 600 {
+		luaState.Push(lua.LNumber(entityId >> 22))
+	} else {
+		luaState.Push(lua.LNumber(entityId >> 24))
+	}
 	return 1
 }
 

@@ -1,18 +1,20 @@
 module hk4e
 
-go 1.23.0
+go 1.24.0
 
 require (
 	github.com/BurntSushi/toml v0.3.1
 	github.com/arl/statsviz v0.5.1
 	github.com/byebyebruce/natsrpc v0.5.5
 	github.com/dengsgo/math-engine v0.0.0-20230823154425-78f211b48149
-	github.com/flswld/halo v1.2.3
+	github.com/flswld/halo v1.2.4-0.20260128220454-bfb76414148c
 	github.com/gin-gonic/gin v1.9.1
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-redis/redis/v8 v8.11.5
 	github.com/golang-jwt/jwt/v4 v4.5.2
+	github.com/golang/protobuf v1.5.4
 	github.com/hjson/hjson-go/v4 v4.2.0
+	github.com/jhump/protoreflect v1.18.0
 	github.com/jszwec/csvutil v1.7.1
 	github.com/nats-io/nats-server/v2 v2.11.1
 	github.com/nats-io/nats.go v1.39.1
@@ -23,7 +25,7 @@ require (
 	github.com/yuin/gopher-lua v1.0.0
 	gitlab.com/gomidi/midi/v2 v2.0.25
 	go.mongodb.org/mongo-driver v1.8.3
-	google.golang.org/protobuf v1.34.0
+	google.golang.org/protobuf v1.36.11
 	gorm.io/driver/mysql v1.5.7
 	gorm.io/gorm v1.25.12
 )
@@ -49,6 +51,7 @@ require (
 	github.com/google/uuid v1.3.0 // indirect
 	github.com/gorilla/websocket v1.4.2 // indirect
 	github.com/inconshreveable/mousetrap v1.0.1 // indirect
+	github.com/jhump/protoreflect/v2 v2.0.0-beta.1 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
@@ -63,6 +66,7 @@ require (
 	github.com/nats-io/nkeys v0.4.10 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/pelletier/go-toml/v2 v2.0.8 // indirect
+	github.com/petermattis/goid v0.0.0-20260113132338-7c7de50cc741 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect

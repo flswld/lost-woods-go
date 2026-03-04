@@ -184,23 +184,25 @@ func Logic(account string, session *net.Session) {
 							ArgumentType: proto.CombatTypeArgument_ENTITY_MOVE,
 						}},
 					}
-					var combatInvocationsNotifyPb pb.Message = combatInvocationsNotify
-					if config.GetConfig().Hk4e.ClientProtoProxyEnable {
-						hk4egatenet.ConvServerPbDataToClient(combatInvocationsNotify, session.ClientCmdProtoMap)
-						clientProtoObj := hk4egatenet.GetClientProtoObjByName("CombatInvocationsNotify", session.ClientCmdProtoMap)
-						if clientProtoObj == nil {
-							continue
-						}
-						err := object.CopyProtoBufSameField(clientProtoObj, combatInvocationsNotify)
-						if err != nil {
-							continue
-						}
-						combatInvocationsNotifyPb = clientProtoObj
-					}
-					body, err := pb.Marshal(combatInvocationsNotifyPb)
+					body, err := pb.Marshal(combatInvocationsNotify)
 					if err != nil {
 						logger.Error("marshal CombatInvocationsNotify error: %v, account: %v", err, account)
 						continue
+					}
+					if config.GetConfig().Hk4e.ClientProtoProxyEnable {
+						hk4egatenet.ConvServerPbDataToClient(combatInvocationsNotify, session.ClientProtoProxy)
+						clientProtoObj := session.ClientProtoProxy.GetClientProtoObjByName("CombatInvocationsNotify")
+						if clientProtoObj == nil {
+							continue
+						}
+						err := object.CopyProtoMsgSameField(clientProtoObj, combatInvocationsNotify)
+						if err != nil {
+							continue
+						}
+						body, err = clientProtoObj.Marshal()
+						if err != nil {
+							continue
+						}
 					}
 					unionCmdNotify := &proto.UnionCmdNotify{
 						CmdList: []*proto.UnionCmd{{
@@ -209,7 +211,7 @@ func Logic(account string, session *net.Session) {
 						}},
 					}
 					if config.GetConfig().Hk4e.ClientProtoProxyEnable {
-						unionCmdNotify.CmdList[0].MessageId = uint32(session.ClientCmdProtoMap.GetClientCmdIdByCmdName("CombatInvocationsNotify"))
+						unionCmdNotify.CmdList[0].MessageId = uint32(session.ClientProtoProxy.GetClientCmdIdByCmdName("CombatInvocationsNotify"))
 					}
 					session.SendMsg(cmd.UnionCmdNotify, unionCmdNotify)
 				}

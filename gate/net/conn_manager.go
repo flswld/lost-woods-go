@@ -13,7 +13,6 @@ import (
 	"hk4e/common/mq"
 	"hk4e/common/region"
 	"hk4e/common/rpc"
-	"hk4e/gate/client_proto"
 	"hk4e/gate/dao"
 	"hk4e/node/api"
 	"hk4e/pkg/random"
@@ -71,7 +70,7 @@ type ConnManager struct {
 	reLoginRemoteKickRegChan chan *RemoteKick
 	// 协议
 	serverCmdProtoMap *cmd.CmdProtoMap
-	clientCmdProtoMap *client_proto.ClientCmdProtoMap
+	clientProtoProxy  *ClientProtoProxy
 	// 密钥
 	signRsaKey   []byte
 	encRsaKeyMap map[string][]byte
@@ -97,7 +96,7 @@ func NewConnManager(db *dao.Dao, messageQueue *mq.MessageQueue, discovery *rpc.D
 	r.reLoginRemoteKickRegChan = make(chan *RemoteKick, 1000)
 	r.serverCmdProtoMap = cmd.NewCmdProtoMap()
 	if config.GetConfig().Hk4e.ClientProtoProxyEnable {
-		r.clientCmdProtoMap = client_proto.NewClientCmdProtoMap()
+		r.clientProtoProxy = NewClientProtoProxy(config.GetConfig().Hk4e.ClientProtoDir)
 	}
 	err := r.run()
 	if err != nil {
@@ -368,7 +367,7 @@ func (c *ConnManager) recvHandle(session *Session) {
 		kcpMsgList := make([]*KcpMsg, 0)
 		DecodeBinToPayload(bin, session.sessionId, &kcpMsgList, session.xorKey)
 		for _, v := range kcpMsgList {
-			protoMsgList := ProtoDecode(v, c.serverCmdProtoMap, c.clientCmdProtoMap)
+			protoMsgList := ProtoDecode(v, c.serverCmdProtoMap, c.clientProtoProxy)
 			for _, vv := range protoMsgList {
 				c.forwardClientMsgToServerHandle(vv, session)
 			}
@@ -390,7 +389,7 @@ func (c *ConnManager) sendHandle(session *Session) {
 			c.closeConn(session, kcp.EnetServerKick)
 			return
 		}
-		kcpMsg := ProtoEncode(protoMsg, c.serverCmdProtoMap, c.clientCmdProtoMap)
+		kcpMsg := ProtoEncode(protoMsg, c.serverCmdProtoMap, c.clientProtoProxy)
 		if kcpMsg == nil {
 			logger.Error("encode kcp msg is nil, sessionId: %v", session.sessionId)
 			continue

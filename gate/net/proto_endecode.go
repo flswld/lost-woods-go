@@ -3,17 +3,23 @@ package net
 import (
 	"bytes"
 	"encoding/json"
-	"reflect"
+	"fmt"
+	"os"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"hk4e/common/config"
-	"hk4e/gate/client_proto"
 	"hk4e/pkg/object"
 	"hk4e/protocol/cmd"
 	"hk4e/protocol/proto"
 
 	"github.com/flswld/halo/logger"
+	"github.com/jhump/protoreflect/desc"
+	"github.com/jhump/protoreflect/desc/protoparse"
+	"github.com/jhump/protoreflect/dynamic"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/encoding/protowire"
 	pb "google.golang.org/protobuf/proto"
 )
 
@@ -31,27 +37,27 @@ type ProtoMessage struct {
 	message pb.Message
 }
 
-func ProtoDecode(kcpMsg *KcpMsg,
-	serverCmdProtoMap *cmd.CmdProtoMap, clientCmdProtoMap *client_proto.ClientCmdProtoMap) (protoMsgList []*ProtoMsg) {
+func ProtoDecode(kcpMsg *KcpMsg, serverCmdProtoMap *cmd.CmdProtoMap, clientProtoProxy *ClientProtoProxy) (protoMsgList []*ProtoMsg) {
 	protoMsgList = make([]*ProtoMsg, 0)
 	if config.GetConfig().Hk4e.ClientProtoProxyEnable {
 		clientCmdId := kcpMsg.CmdId
 		clientProtoData := kcpMsg.ProtoData
-		cmdName := clientCmdProtoMap.GetClientCmdNameByCmdId(clientCmdId)
+		cmdName := clientProtoProxy.GetClientCmdNameByCmdId(clientCmdId)
 		if cmdName == "" {
 			logger.Error("get cmdName is nil, clientCmdId: %v", clientCmdId)
 			return protoMsgList
 		}
-		clientProtoObj := GetClientProtoObjByName(cmdName, clientCmdProtoMap)
+		clientProtoObj := clientProtoProxy.GetClientProtoObjByName(cmdName)
 		if clientProtoObj == nil {
 			logger.Error("get client proto obj is nil, cmdName: %v", cmdName)
 			return protoMsgList
 		}
-		err := pb.Unmarshal(clientProtoData, clientProtoObj)
+		err := clientProtoObj.Unmarshal(clientProtoData)
 		if err != nil {
 			logger.Error("unmarshal client proto error: %v", err)
 			return protoMsgList
 		}
+		clientProtoProxy.Decrypt(cmdName, clientProtoObj)
 		serverCmdId := serverCmdProtoMap.GetCmdIdByCmdName(cmdName)
 		if serverCmdId == 0 {
 			logger.Error("get server cmdId is nil, cmdName: %v", cmdName)
@@ -62,12 +68,12 @@ func ProtoDecode(kcpMsg *KcpMsg,
 			logger.Error("get server proto obj is nil, serverCmdId: %v", serverCmdId)
 			return protoMsgList
 		}
-		err = object.CopyProtoBufSameField(serverProtoObj, clientProtoObj)
+		err = object.CopyProtoMsgSameField(serverProtoObj, clientProtoObj)
 		if err != nil {
 			logger.Error("copy proto obj error: %v", err)
 			return protoMsgList
 		}
-		ConvClientPbDataToServer(serverProtoObj, clientCmdProtoMap)
+		ConvClientPbDataToServer(serverProtoObj, clientProtoProxy)
 		serverProtoData, err := pb.Marshal(serverProtoObj)
 		if err != nil {
 			logger.Error("marshal server proto error: %v", err)
@@ -93,7 +99,7 @@ func ProtoDecode(kcpMsg *KcpMsg,
 	}
 	// payload msg
 	protoMessageList := make([]*ProtoMessage, 0)
-	ProtoDecodePayloadLoop(kcpMsg.CmdId, kcpMsg.ProtoData, &protoMessageList, serverCmdProtoMap, clientCmdProtoMap)
+	ProtoDecodePayloadLoop(kcpMsg.CmdId, kcpMsg.ProtoData, &protoMessageList, serverCmdProtoMap, clientProtoProxy)
 	if len(protoMessageList) == 0 {
 		logger.Error("decode proto object is nil")
 		return protoMsgList
@@ -139,7 +145,7 @@ func ProtoDecode(kcpMsg *KcpMsg,
 }
 
 func ProtoDecodePayloadLoop(cmdId uint16, protoData []byte, protoMessageList *[]*ProtoMessage,
-	serverCmdProtoMap *cmd.CmdProtoMap, clientCmdProtoMap *client_proto.ClientCmdProtoMap) {
+	serverCmdProtoMap *cmd.CmdProtoMap, clientProtoProxy *ClientProtoProxy) {
 	protoObj := DecodePayloadToProto(cmdId, protoData, serverCmdProtoMap)
 	if protoObj == nil {
 		logger.Error("decode proto object is nil")
@@ -156,21 +162,22 @@ func ProtoDecodePayloadLoop(cmdId uint16, protoData []byte, protoMessageList *[]
 			if config.GetConfig().Hk4e.ClientProtoProxyEnable {
 				clientCmdId := uint16(unionCmd.MessageId)
 				clientProtoData := unionCmd.Body
-				cmdName := clientCmdProtoMap.GetClientCmdNameByCmdId(clientCmdId)
+				cmdName := clientProtoProxy.GetClientCmdNameByCmdId(clientCmdId)
 				if cmdName == "" {
 					logger.Error("get cmdName is nil, clientCmdId: %v", clientCmdId)
 					continue
 				}
-				clientProtoObj := GetClientProtoObjByName(cmdName, clientCmdProtoMap)
+				clientProtoObj := clientProtoProxy.GetClientProtoObjByName(cmdName)
 				if clientProtoObj == nil {
 					logger.Error("get client proto obj is nil, cmdName: %v", cmdName)
 					continue
 				}
-				err := pb.Unmarshal(clientProtoData, clientProtoObj)
+				err := clientProtoObj.Unmarshal(clientProtoData)
 				if err != nil {
 					logger.Error("unmarshal client proto error: %v", err)
 					continue
 				}
+				clientProtoProxy.Decrypt(cmdName, clientProtoObj)
 				serverCmdId := serverCmdProtoMap.GetCmdIdByCmdName(cmdName)
 				if serverCmdId == 0 {
 					logger.Error("get server cmdId is nil, cmdName: %v", cmdName)
@@ -181,12 +188,12 @@ func ProtoDecodePayloadLoop(cmdId uint16, protoData []byte, protoMessageList *[]
 					logger.Error("get server proto obj is nil, serverCmdId: %v", serverCmdId)
 					continue
 				}
-				err = object.CopyProtoBufSameField(serverProtoObj, clientProtoObj)
+				err = object.CopyProtoMsgSameField(serverProtoObj, clientProtoObj)
 				if err != nil {
 					logger.Error("copy proto obj error: %v", err)
 					continue
 				}
-				ConvClientPbDataToServer(serverProtoObj, clientCmdProtoMap)
+				ConvClientPbDataToServer(serverProtoObj, clientProtoProxy)
 				serverProtoData, err := pb.Marshal(serverProtoObj)
 				if err != nil {
 					logger.Error("marshal server proto error: %v", err)
@@ -195,8 +202,7 @@ func ProtoDecodePayloadLoop(cmdId uint16, protoData []byte, protoMessageList *[]
 				unionCmd.MessageId = uint32(serverCmdId)
 				unionCmd.Body = serverProtoData
 			}
-			ProtoDecodePayloadLoop(uint16(unionCmd.MessageId), unionCmd.Body, protoMessageList,
-				serverCmdProtoMap, clientCmdProtoMap)
+			ProtoDecodePayloadLoop(uint16(unionCmd.MessageId), unionCmd.Body, protoMessageList, serverCmdProtoMap, clientProtoProxy)
 		}
 	}
 	*protoMessageList = append(*protoMessageList, &ProtoMessage{
@@ -205,8 +211,7 @@ func ProtoDecodePayloadLoop(cmdId uint16, protoData []byte, protoMessageList *[]
 	})
 }
 
-func ProtoEncode(protoMsg *ProtoMsg,
-	serverCmdProtoMap *cmd.CmdProtoMap, clientCmdProtoMap *client_proto.ClientCmdProtoMap) (kcpMsg *KcpMsg) {
+func ProtoEncode(protoMsg *ProtoMsg, serverCmdProtoMap *cmd.CmdProtoMap, clientProtoProxy *ClientProtoProxy) (kcpMsg *KcpMsg) {
 	if config.GetConfig().Hk4e.TrackPacket {
 		cmdName := "???"
 		if protoMsg.PayloadMessage != nil {
@@ -256,28 +261,29 @@ func ProtoEncode(protoMsg *ProtoMsg,
 			logger.Error("unmarshal server proto error: %v", err)
 			return nil
 		}
-		ConvServerPbDataToClient(serverProtoObj, clientCmdProtoMap)
+		ConvServerPbDataToClient(serverProtoObj, clientProtoProxy)
 		cmdName := serverCmdProtoMap.GetCmdNameByCmdId(serverCmdId)
 		if cmdName == "" {
 			logger.Error("get cmdName is nil, serverCmdId: %v", serverCmdId)
 			return nil
 		}
-		clientProtoObj := GetClientProtoObjByName(cmdName, clientCmdProtoMap)
+		clientProtoObj := clientProtoProxy.GetClientProtoObjByName(cmdName)
 		if clientProtoObj == nil {
 			logger.Error("get client proto obj is nil, cmdName: %v", cmdName)
 			return nil
 		}
-		err = object.CopyProtoBufSameField(clientProtoObj, serverProtoObj)
+		err = object.CopyProtoMsgSameField(clientProtoObj, serverProtoObj)
 		if err != nil {
 			logger.Error("copy proto obj error: %v", err)
 			return nil
 		}
-		clientProtoData, err := pb.Marshal(clientProtoObj)
+		clientProtoProxy.Encrypt(cmdName, clientProtoObj)
+		clientProtoData, err := clientProtoObj.Marshal()
 		if err != nil {
 			logger.Error("marshal client proto error: %v", err)
 			return nil
 		}
-		clientCmdId := clientCmdProtoMap.GetClientCmdIdByCmdName(cmdName)
+		clientCmdId := clientProtoProxy.GetClientCmdIdByCmdName(cmdName)
 		if clientCmdId == 0 {
 			logger.Error("get client cmdId is nil, cmdName: %v", cmdName)
 			return nil
@@ -312,22 +318,328 @@ func EncodeProtoToPayload(protoObj pb.Message, serverCmdProtoMap *cmd.CmdProtoMa
 	return protoData
 }
 
-// 网关客户端协议代理相关反射方法
+// 客户端协议代理
 
-func GetClientProtoObjByName(protoObjName string, clientCmdProtoMap *client_proto.ClientCmdProtoMap) pb.Message {
-	fn := clientCmdProtoMap.RefValue.MethodByName("GetClientProtoObjByName")
-	if !fn.IsValid() {
-		logger.Error("fn is nil")
+type ClientProtoProxy struct {
+	MsgDescMap      map[string]*desc.MessageDescriptor
+	CmdIdCmdNameMap map[uint16]string
+	CmdNameCmdIdMap map[string]uint16
+	MsgFieldXorMap  map[string][]*FieldXorConfig
+}
+
+func NewClientProtoProxy(protoDir string) *ClientProtoProxy {
+	c := new(ClientProtoProxy)
+	dir, err := os.ReadDir(protoDir)
+	if err != nil {
+		panic(err)
+	}
+	protoFileList := make([]string, 0)
+	for _, entry := range dir {
+		if entry.IsDir() {
+			continue
+		}
+		split := strings.Split(entry.Name(), ".")
+		if len(split) < 2 || split[len(split)-1] != "proto" {
+			continue
+		}
+		protoFileList = append(protoFileList, entry.Name())
+	}
+	parser := new(protoparse.Parser)
+	parser.ImportPaths = []string{protoDir}
+	fileDescList, err := parser.ParseFiles(protoFileList...)
+	if err != nil {
+		panic(err)
+	}
+	c.MsgDescMap = make(map[string]*desc.MessageDescriptor)
+	c.MsgFieldXorMap = make(map[string][]*FieldXorConfig)
+	for _, fileDesc := range fileDescList {
+		for _, msgDesc := range fileDesc.GetMessageTypes() {
+			c.MsgDescMap[msgDesc.GetName()] = msgDesc
+			c.ParseMsgFieldXor(msgDesc)
+		}
+	}
+	c.CmdIdCmdNameMap = make(map[uint16]string)
+	c.CmdNameCmdIdMap = make(map[string]uint16)
+	clientCmdFile, err := os.ReadFile(protoDir + "/client_cmd.csv")
+	if err == nil {
+		// 从预置client_cmd.csv文件中读取CmdId和CmdName
+		clientCmdLineList := strings.Split(string(clientCmdFile), "\n")
+		for _, clientCmdLine := range clientCmdLineList {
+			// 清理空格以及换行符之类的
+			clientCmdLine = strings.TrimSpace(clientCmdLine)
+			if clientCmdLine == "" {
+				continue
+			}
+			item := strings.Split(clientCmdLine, ",")
+			if len(item) != 2 {
+				panic("parse client cmd file error")
+			}
+			cmdName := item[0]
+			cmdId, err := strconv.Atoi(item[1])
+			if err != nil {
+				panic(err)
+			}
+			c.CmdIdCmdNameMap[uint16(cmdId)] = cmdName
+			c.CmdNameCmdIdMap[cmdName] = uint16(cmdId)
+		}
+	} else {
+		// 从proto文件中读取CmdId和CmdName
+		for _, protoFile := range protoFileList {
+			protoFileData, err := os.ReadFile(protoDir + "/" + protoFile)
+			if err != nil {
+				panic(err)
+			}
+			protoFileLineList := strings.Split(string(protoFileData), "\n")
+			for index, line := range protoFileLineList {
+				if strings.Contains(line, "// CmdId: ") {
+					lineSplit := strings.Split(line, " ")
+					if len(lineSplit) >= 3 {
+						cmdId, err := strconv.Atoi(lineSplit[2])
+						if err != nil {
+							continue
+						}
+						for _, nextLine := range protoFileLineList[index+1:] {
+							if strings.Contains(nextLine, "message ") && strings.Contains(nextLine, " {") {
+								nextLineSplit := strings.Split(nextLine, " ")
+								if len(nextLineSplit) == 3 {
+									cmdName := nextLineSplit[1]
+									c.CmdIdCmdNameMap[uint16(cmdId)] = cmdName
+									c.CmdNameCmdIdMap[cmdName] = uint16(cmdId)
+								}
+								break
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return c
+}
+
+func (c *ClientProtoProxy) GetClientCmdNameByCmdId(cmdId uint16) string {
+	cmdName, exist := c.CmdIdCmdNameMap[cmdId]
+	if !exist {
+		logger.Error("unknown cmd id: %v", cmdId)
+		return ""
+	}
+	return cmdName
+}
+
+func (c *ClientProtoProxy) GetClientCmdIdByCmdName(cmdName string) uint16 {
+	cmdId, exist := c.CmdNameCmdIdMap[cmdName]
+	if !exist {
+		logger.Error("unknown cmd name: %v", cmdName)
+		return 0
+	}
+	return cmdId
+}
+
+func (c *ClientProtoProxy) GetClientProtoObjByName(protoObjName string) *dynamic.Message {
+	msgDesc, exist := c.MsgDescMap[protoObjName]
+	if !exist {
+		logger.Error("unknown proto obj name: %v", protoObjName)
 		return nil
 	}
-	ret := fn.Call([]reflect.Value{reflect.ValueOf(protoObjName)})
-	obj := ret[0].Interface()
-	if obj == nil {
-		logger.Error("try to get a not exist proto obj, protoObjName: %v", protoObjName)
+	dMsg := dynamic.NewMessage(msgDesc)
+	return dMsg
+}
+
+// int字段xor加解密
+
+type XorAlg struct {
+	Op1  byte
+	Key1 uint16
+	Op2  byte
+	Key2 uint16
+}
+
+func (x XorAlg) String() string {
+	return fmt.Sprintf("(val %s %d) %s %d", string(x.Op1), x.Key1, string(x.Op2), x.Key2)
+}
+
+type FieldXorConfig struct {
+	FieldName   string
+	FieldNumber int32
+	EncAlg      XorAlg
+	DecAlg      XorAlg
+}
+
+func (c *ClientProtoProxy) ParseXorAlg(s string) *XorAlg {
+	p := `\(\s*val\s*([\+\-\^])\s*(\d+)\s*\)\s*([\+\-\^])\s*(\d+)`
+	r := regexp.MustCompile(p)
+	m := r.FindStringSubmatch(s)
+	if m == nil {
 		return nil
 	}
-	clientProtoObj := obj.(pb.Message)
-	return clientProtoObj
+	op1 := m[1]
+	key1 := m[2]
+	op2 := m[3]
+	key2 := m[4]
+	k1, _ := strconv.Atoi(key1)
+	k2, _ := strconv.Atoi(key2)
+	return &XorAlg{
+		Op1:  op1[0],
+		Key1: uint16(k1),
+		Op2:  op2[0],
+		Key2: uint16(k2),
+	}
+}
+
+func (c *ClientProtoProxy) ParseMsgFieldXor(msg *desc.MessageDescriptor) {
+	fieldXorConfigList := make([]*FieldXorConfig, 0)
+	for _, field := range msg.GetFields() {
+		fieldOptionRef := field.GetFieldOptions().ProtoReflect()
+		data := fieldOptionRef.GetUnknown()
+		if len(data) == 0 {
+			continue
+		}
+		var encAlg *XorAlg = nil
+		var decAlg *XorAlg = nil
+		for {
+			tag, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				break
+			}
+			data = data[n:]
+			fieldNum, wireType := protowire.DecodeTag(tag)
+			if wireType != protowire.BytesType {
+				break
+			}
+			s, n := protowire.ConsumeString(data)
+			if n < 0 {
+				break
+			}
+			xorAlg := c.ParseXorAlg(s)
+			if xorAlg == nil {
+				break
+			}
+			switch fieldNum {
+			case 50001:
+				encAlg = xorAlg
+			case 50002:
+				decAlg = xorAlg
+			}
+			if n == len(data) {
+				break
+			}
+			data = data[n:]
+		}
+		if encAlg == nil || decAlg == nil {
+			continue
+		}
+		fieldXorConfigList = append(fieldXorConfigList, &FieldXorConfig{
+			FieldName:   field.GetName(),
+			FieldNumber: field.GetNumber(),
+			EncAlg:      *encAlg,
+			DecAlg:      *decAlg,
+		})
+	}
+	if len(fieldXorConfigList) > 0 {
+		c.MsgFieldXorMap[msg.GetName()] = fieldXorConfigList
+	}
+}
+
+func (c *ClientProtoProxy) Decrypt(name string, dMsg *dynamic.Message) {
+	fieldXorConfigList := c.MsgFieldXorMap[name]
+	if fieldXorConfigList == nil {
+		return
+	}
+	for _, fieldXorConfig := range fieldXorConfigList {
+		val := dMsg.GetFieldByNumber(int(fieldXorConfig.FieldNumber))
+		v := int64(0)
+		switch val.(type) {
+		case int32:
+			v = int64(val.(int32))
+		case int64:
+			v = val.(int64)
+		case uint32:
+			v = int64(val.(uint32))
+		case uint64:
+			v = int64(val.(uint64))
+		}
+		switch fieldXorConfig.DecAlg.Op1 {
+		case '+':
+			v += int64(fieldXorConfig.DecAlg.Key1)
+		case '-':
+			v -= int64(fieldXorConfig.DecAlg.Key1)
+		case '^':
+			v ^= int64(fieldXorConfig.DecAlg.Key1)
+		}
+		switch fieldXorConfig.DecAlg.Op2 {
+		case '+':
+			v += int64(fieldXorConfig.DecAlg.Key2)
+		case '-':
+			v -= int64(fieldXorConfig.DecAlg.Key2)
+		case '^':
+			v ^= int64(fieldXorConfig.DecAlg.Key2)
+		}
+		switch val.(type) {
+		case int32:
+			dMsg.SetFieldByNumber(int(fieldXorConfig.FieldNumber), int32(v))
+			logger.Debug("[Decrypt] msg:%v field:%v enc:%v dec:%v", name, fieldXorConfig.FieldName, val, int32(v))
+		case int64:
+			dMsg.SetFieldByNumber(int(fieldXorConfig.FieldNumber), v)
+			logger.Debug("[Decrypt] msg:%v field:%v enc:%v dec:%v", name, fieldXorConfig.FieldName, val, v)
+		case uint32:
+			dMsg.SetFieldByNumber(int(fieldXorConfig.FieldNumber), uint32(v))
+			logger.Debug("[Decrypt] msg:%v field:%v enc:%v dec:%v", name, fieldXorConfig.FieldName, val, uint32(v))
+		case uint64:
+			dMsg.SetFieldByNumber(int(fieldXorConfig.FieldNumber), uint64(v))
+			logger.Debug("[Decrypt] msg:%v field:%v enc:%v dec:%v", name, fieldXorConfig.FieldName, val, uint64(v))
+		}
+	}
+}
+
+func (c *ClientProtoProxy) Encrypt(name string, dMsg *dynamic.Message) {
+	fieldXorConfigList := c.MsgFieldXorMap[name]
+	if fieldXorConfigList == nil {
+		return
+	}
+	for _, fieldXorConfig := range fieldXorConfigList {
+		val := dMsg.GetFieldByNumber(int(fieldXorConfig.FieldNumber))
+		v := int64(0)
+		switch val.(type) {
+		case int32:
+			v = int64(val.(int32))
+		case int64:
+			v = val.(int64)
+		case uint32:
+			v = int64(val.(uint32))
+		case uint64:
+			v = int64(val.(uint64))
+		}
+		switch fieldXorConfig.EncAlg.Op1 {
+		case '+':
+			v += int64(fieldXorConfig.EncAlg.Key1)
+		case '-':
+			v -= int64(fieldXorConfig.EncAlg.Key1)
+		case '^':
+			v ^= int64(fieldXorConfig.EncAlg.Key1)
+		}
+		switch fieldXorConfig.EncAlg.Op2 {
+		case '+':
+			v += int64(fieldXorConfig.EncAlg.Key2)
+		case '-':
+			v -= int64(fieldXorConfig.EncAlg.Key2)
+		case '^':
+			v ^= int64(fieldXorConfig.EncAlg.Key2)
+		}
+		switch val.(type) {
+		case int32:
+			dMsg.SetFieldByNumber(int(fieldXorConfig.FieldNumber), int32(v))
+			logger.Debug("[Encrypt] msg:%v field:%v dec:%v enc:%v", name, fieldXorConfig.FieldName, val, int32(v))
+		case int64:
+			dMsg.SetFieldByNumber(int(fieldXorConfig.FieldNumber), v)
+			logger.Debug("[Encrypt] msg:%v field:%v dec:%v enc:%v", name, fieldXorConfig.FieldName, val, v)
+		case uint32:
+			dMsg.SetFieldByNumber(int(fieldXorConfig.FieldNumber), uint32(v))
+			logger.Debug("[Encrypt] msg:%v field:%v dec:%v enc:%v", name, fieldXorConfig.FieldName, val, uint32(v))
+		case uint64:
+			dMsg.SetFieldByNumber(int(fieldXorConfig.FieldNumber), uint64(v))
+			logger.Debug("[Encrypt] msg:%v field:%v dec:%v enc:%v", name, fieldXorConfig.FieldName, val, uint64(v))
+		}
+	}
 }
 
 // 网关客户端协议代理二级pb数据转换
@@ -337,7 +649,7 @@ const (
 	ServerPbDataToClient
 )
 
-func ConvClientPbDataToServer(protoObj pb.Message, clientCmdProtoMap *client_proto.ClientCmdProtoMap) pb.Message {
+func ConvClientPbDataToServer(protoObj pb.Message, clientProtoProxy *ClientProtoProxy) pb.Message {
 	cmdName := string(protoObj.ProtoReflect().Descriptor().FullName())
 	if strings.Contains(cmdName, "proto.") {
 		cmdName = strings.Split(cmdName, ".")[1]
@@ -346,28 +658,28 @@ func ConvClientPbDataToServer(protoObj pb.Message, clientCmdProtoMap *client_pro
 	case "CombatInvocationsNotify":
 		ntf := protoObj.(*proto.CombatInvocationsNotify)
 		for _, entry := range ntf.InvokeList {
-			HandleCombatInvokeEntry(ClientPbDataToServer, entry, clientCmdProtoMap)
+			HandleCombatInvokeEntry(ClientPbDataToServer, entry, clientProtoProxy)
 		}
 	case "AbilityInvocationsNotify":
 		ntf := protoObj.(*proto.AbilityInvocationsNotify)
 		for _, entry := range ntf.Invokes {
-			HandleAbilityInvokeEntry(ClientPbDataToServer, entry, clientCmdProtoMap)
+			HandleAbilityInvokeEntry(ClientPbDataToServer, entry, clientProtoProxy)
 		}
 	case "ClientAbilityInitFinishNotify":
 		ntf := protoObj.(*proto.ClientAbilityInitFinishNotify)
 		for _, entry := range ntf.Invokes {
-			HandleAbilityInvokeEntry(ClientPbDataToServer, entry, clientCmdProtoMap)
+			HandleAbilityInvokeEntry(ClientPbDataToServer, entry, clientProtoProxy)
 		}
 	case "ClientAbilityChangeNotify":
 		ntf := protoObj.(*proto.ClientAbilityChangeNotify)
 		for _, entry := range ntf.Invokes {
-			HandleAbilityInvokeEntry(ClientPbDataToServer, entry, clientCmdProtoMap)
+			HandleAbilityInvokeEntry(ClientPbDataToServer, entry, clientProtoProxy)
 		}
 	}
 	return protoObj
 }
 
-func ConvServerPbDataToClient(protoObj pb.Message, clientCmdProtoMap *client_proto.ClientCmdProtoMap) pb.Message {
+func ConvServerPbDataToClient(protoObj pb.Message, clientProtoProxy *ClientProtoProxy) pb.Message {
 	cmdName := string(protoObj.ProtoReflect().Descriptor().FullName())
 	if strings.Contains(cmdName, "proto.") {
 		cmdName = strings.Split(cmdName, ".")[1]
@@ -376,40 +688,40 @@ func ConvServerPbDataToClient(protoObj pb.Message, clientCmdProtoMap *client_pro
 	case "CombatInvocationsNotify":
 		ntf := protoObj.(*proto.CombatInvocationsNotify)
 		for _, entry := range ntf.InvokeList {
-			HandleCombatInvokeEntry(ServerPbDataToClient, entry, clientCmdProtoMap)
+			HandleCombatInvokeEntry(ServerPbDataToClient, entry, clientProtoProxy)
 		}
 	case "AbilityInvocationsNotify":
 		ntf := protoObj.(*proto.AbilityInvocationsNotify)
 		for _, entry := range ntf.Invokes {
-			HandleAbilityInvokeEntry(ServerPbDataToClient, entry, clientCmdProtoMap)
+			HandleAbilityInvokeEntry(ServerPbDataToClient, entry, clientProtoProxy)
 		}
 	case "ClientAbilityInitFinishNotify":
 		ntf := protoObj.(*proto.ClientAbilityInitFinishNotify)
 		for _, entry := range ntf.Invokes {
-			HandleAbilityInvokeEntry(ServerPbDataToClient, entry, clientCmdProtoMap)
+			HandleAbilityInvokeEntry(ServerPbDataToClient, entry, clientProtoProxy)
 		}
 	case "ClientAbilityChangeNotify":
 		ntf := protoObj.(*proto.ClientAbilityChangeNotify)
 		for _, entry := range ntf.Invokes {
-			HandleAbilityInvokeEntry(ServerPbDataToClient, entry, clientCmdProtoMap)
+			HandleAbilityInvokeEntry(ServerPbDataToClient, entry, clientProtoProxy)
 		}
 	}
 	return protoObj
 }
 
 func ConvClientServerPbData(convType int, protoObjName string, serverProtoObj pb.Message, protoDataRef *[]byte,
-	clientCmdProtoMap *client_proto.ClientCmdProtoMap) {
+	clientProtoProxy *ClientProtoProxy) {
 	switch convType {
 	case ClientPbDataToServer:
-		clientProtoObj := GetClientProtoObjByName(protoObjName, clientCmdProtoMap)
+		clientProtoObj := clientProtoProxy.GetClientProtoObjByName(protoObjName)
 		if clientProtoObj == nil {
 			return
 		}
-		err := pb.Unmarshal(*protoDataRef, clientProtoObj)
+		err := clientProtoObj.Unmarshal(*protoDataRef)
 		if err != nil {
 			return
 		}
-		err = object.CopyProtoBufSameField(serverProtoObj, clientProtoObj)
+		err = object.CopyProtoMsgSameField(serverProtoObj, clientProtoObj)
 		if err != nil {
 			return
 		}
@@ -423,15 +735,15 @@ func ConvClientServerPbData(convType int, protoObjName string, serverProtoObj pb
 		if err != nil {
 			return
 		}
-		clientProtoObj := GetClientProtoObjByName(protoObjName, clientCmdProtoMap)
+		clientProtoObj := clientProtoProxy.GetClientProtoObjByName(protoObjName)
 		if clientProtoObj == nil {
 			return
 		}
-		err = object.CopyProtoBufSameField(clientProtoObj, serverProtoObj)
+		err = object.CopyProtoMsgSameField(clientProtoObj, serverProtoObj)
 		if err != nil {
 			return
 		}
-		clientProtoData, err := pb.Marshal(clientProtoObj)
+		clientProtoData, err := clientProtoObj.Marshal()
 		if err != nil {
 			return
 		}
@@ -439,158 +751,158 @@ func ConvClientServerPbData(convType int, protoObjName string, serverProtoObj pb
 	}
 }
 
-func HandleCombatInvokeEntry(convType int, entry *proto.CombatInvokeEntry, clientCmdProtoMap *client_proto.ClientCmdProtoMap) {
+func HandleCombatInvokeEntry(convType int, entry *proto.CombatInvokeEntry, clientProtoProxy *ClientProtoProxy) {
 	switch entry.ArgumentType {
 	case proto.CombatTypeArgument_COMBAT_EVT_BEING_HIT:
-		ConvClientServerPbData(convType, "EvtBeingHitInfo", new(proto.EvtBeingHitInfo), &entry.CombatData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "EvtBeingHitInfo", new(proto.EvtBeingHitInfo), &entry.CombatData, clientProtoProxy)
 	case proto.CombatTypeArgument_COMBAT_ANIMATOR_STATE_CHANGED:
-		ConvClientServerPbData(convType, "EvtAnimatorStateChangedInfo", new(proto.EvtAnimatorStateChangedInfo), &entry.CombatData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "EvtAnimatorStateChangedInfo", new(proto.EvtAnimatorStateChangedInfo), &entry.CombatData, clientProtoProxy)
 	case proto.CombatTypeArgument_COMBAT_FACE_TO_DIR:
-		ConvClientServerPbData(convType, "EvtFaceToDirInfo", new(proto.EvtFaceToDirInfo), &entry.CombatData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "EvtFaceToDirInfo", new(proto.EvtFaceToDirInfo), &entry.CombatData, clientProtoProxy)
 	case proto.CombatTypeArgument_COMBAT_SET_ATTACK_TARGET:
-		ConvClientServerPbData(convType, "EvtSetAttackTargetInfo", new(proto.EvtSetAttackTargetInfo), &entry.CombatData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "EvtSetAttackTargetInfo", new(proto.EvtSetAttackTargetInfo), &entry.CombatData, clientProtoProxy)
 	case proto.CombatTypeArgument_COMBAT_RUSH_MOVE:
-		ConvClientServerPbData(convType, "EvtRushMoveInfo", new(proto.EvtRushMoveInfo), &entry.CombatData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "EvtRushMoveInfo", new(proto.EvtRushMoveInfo), &entry.CombatData, clientProtoProxy)
 	case proto.CombatTypeArgument_COMBAT_ANIMATOR_PARAMETER_CHANGED:
-		ConvClientServerPbData(convType, "EvtAnimatorParameterInfo", new(proto.EvtAnimatorParameterInfo), &entry.CombatData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "EvtAnimatorParameterInfo", new(proto.EvtAnimatorParameterInfo), &entry.CombatData, clientProtoProxy)
 	case proto.CombatTypeArgument_ENTITY_MOVE:
-		ConvClientServerPbData(convType, "EntityMoveInfo", new(proto.EntityMoveInfo), &entry.CombatData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "EntityMoveInfo", new(proto.EntityMoveInfo), &entry.CombatData, clientProtoProxy)
 	case proto.CombatTypeArgument_SYNC_ENTITY_POSITION:
-		ConvClientServerPbData(convType, "EvtSyncEntityPositionInfo", new(proto.EvtSyncEntityPositionInfo), &entry.CombatData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "EvtSyncEntityPositionInfo", new(proto.EvtSyncEntityPositionInfo), &entry.CombatData, clientProtoProxy)
 	case proto.CombatTypeArgument_COMBAT_STEER_MOTION_INFO:
-		ConvClientServerPbData(convType, "EvtCombatSteerMotionInfo", new(proto.EvtCombatSteerMotionInfo), &entry.CombatData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "EvtCombatSteerMotionInfo", new(proto.EvtCombatSteerMotionInfo), &entry.CombatData, clientProtoProxy)
 	case proto.CombatTypeArgument_COMBAT_FORCE_SET_POS_INFO:
-		ConvClientServerPbData(convType, "EvtCombatForceSetPosInfo", new(proto.EvtCombatForceSetPosInfo), &entry.CombatData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "EvtCombatForceSetPosInfo", new(proto.EvtCombatForceSetPosInfo), &entry.CombatData, clientProtoProxy)
 	case proto.CombatTypeArgument_COMBAT_COMPENSATE_POS_DIFF:
-		ConvClientServerPbData(convType, "EvtCompensatePosDiffInfo", new(proto.EvtCompensatePosDiffInfo), &entry.CombatData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "EvtCompensatePosDiffInfo", new(proto.EvtCompensatePosDiffInfo), &entry.CombatData, clientProtoProxy)
 	case proto.CombatTypeArgument_COMBAT_MONSTER_DO_BLINK:
-		ConvClientServerPbData(convType, "EvtMonsterDoBlink", new(proto.EvtMonsterDoBlink), &entry.CombatData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "EvtMonsterDoBlink", new(proto.EvtMonsterDoBlink), &entry.CombatData, clientProtoProxy)
 	case proto.CombatTypeArgument_COMBAT_FIXED_RUSH_MOVE:
-		ConvClientServerPbData(convType, "EvtFixedRushMove", new(proto.EvtFixedRushMove), &entry.CombatData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "EvtFixedRushMove", new(proto.EvtFixedRushMove), &entry.CombatData, clientProtoProxy)
 	case proto.CombatTypeArgument_COMBAT_SYNC_TRANSFORM:
-		ConvClientServerPbData(convType, "EvtSyncTransform", new(proto.EvtSyncTransform), &entry.CombatData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "EvtSyncTransform", new(proto.EvtSyncTransform), &entry.CombatData, clientProtoProxy)
 	case proto.CombatTypeArgument_COMBAT_LIGHT_CORE_MOVE:
-		ConvClientServerPbData(convType, "EvtLightCoreMove", new(proto.EvtLightCoreMove), &entry.CombatData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "EvtLightCoreMove", new(proto.EvtLightCoreMove), &entry.CombatData, clientProtoProxy)
 	case proto.CombatTypeArgument_COMBAT_BEING_HEALED_NTF:
-		ConvClientServerPbData(convType, "EvtBeingHealedNotify", new(proto.EvtBeingHealedNotify), &entry.CombatData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "EvtBeingHealedNotify", new(proto.EvtBeingHealedNotify), &entry.CombatData, clientProtoProxy)
 	case proto.CombatTypeArgument_COMBAT_SKILL_ANCHOR_POSITION_NTF:
-		ConvClientServerPbData(convType, "EvtSyncSkillAnchorPosition", new(proto.EvtSyncSkillAnchorPosition), &entry.CombatData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "EvtSyncSkillAnchorPosition", new(proto.EvtSyncSkillAnchorPosition), &entry.CombatData, clientProtoProxy)
 	case proto.CombatTypeArgument_COMBAT_GRAPPLING_HOOK_MOVE:
-		ConvClientServerPbData(convType, "EvtGrapplingHookMove", new(proto.EvtGrapplingHookMove), &entry.CombatData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "EvtGrapplingHookMove", new(proto.EvtGrapplingHookMove), &entry.CombatData, clientProtoProxy)
 	}
 }
 
-func HandleAbilityInvokeEntry(convType int, entry *proto.AbilityInvokeEntry, clientCmdProtoMap *client_proto.ClientCmdProtoMap) {
+func HandleAbilityInvokeEntry(convType int, entry *proto.AbilityInvokeEntry, clientProtoProxy *ClientProtoProxy) {
 	switch entry.ArgumentType {
 	case proto.AbilityInvokeArgument_ABILITY_META_MODIFIER_CHANGE:
-		ConvClientServerPbData(convType, "AbilityMetaModifierChange", new(proto.AbilityMetaModifierChange), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMetaModifierChange", new(proto.AbilityMetaModifierChange), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_META_SPECIAL_FLOAT_ARGUMENT:
-		ConvClientServerPbData(convType, "AbilityMetaSpecialFloatArgument", new(proto.AbilityMetaSpecialFloatArgument), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMetaSpecialFloatArgument", new(proto.AbilityMetaSpecialFloatArgument), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_META_OVERRIDE_PARAM:
-		ConvClientServerPbData(convType, "AbilityScalarValueEntry", new(proto.AbilityScalarValueEntry), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityScalarValueEntry", new(proto.AbilityScalarValueEntry), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_META_CLEAR_OVERRIDE_PARAM:
-		ConvClientServerPbData(convType, "AbilityString", new(proto.AbilityString), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityString", new(proto.AbilityString), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_META_REINIT_OVERRIDEMAP:
-		ConvClientServerPbData(convType, "AbilityMetaReInitOverrideMap", new(proto.AbilityMetaReInitOverrideMap), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMetaReInitOverrideMap", new(proto.AbilityMetaReInitOverrideMap), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_META_GLOBAL_FLOAT_VALUE:
-		ConvClientServerPbData(convType, "AbilityScalarValueEntry", new(proto.AbilityScalarValueEntry), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityScalarValueEntry", new(proto.AbilityScalarValueEntry), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_META_CLEAR_GLOBAL_FLOAT_VALUE:
-		ConvClientServerPbData(convType, "AbilityString", new(proto.AbilityString), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityString", new(proto.AbilityString), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_META_ABILITY_ELEMENT_STRENGTH:
-		ConvClientServerPbData(convType, "AbilityFloatValue", new(proto.AbilityFloatValue), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityFloatValue", new(proto.AbilityFloatValue), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_META_ADD_OR_GET_ABILITY_AND_TRIGGER:
-		ConvClientServerPbData(convType, "AbilityMetaAddOrGetAbilityAndTrigger", new(proto.AbilityMetaAddOrGetAbilityAndTrigger), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMetaAddOrGetAbilityAndTrigger", new(proto.AbilityMetaAddOrGetAbilityAndTrigger), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_META_SET_KILLED_SETATE:
-		ConvClientServerPbData(convType, "AbilityMetaSetKilledState", new(proto.AbilityMetaSetKilledState), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMetaSetKilledState", new(proto.AbilityMetaSetKilledState), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_META_SET_ABILITY_TRIGGER:
-		ConvClientServerPbData(convType, "AbilityMetaSetAbilityTrigger", new(proto.AbilityMetaSetAbilityTrigger), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMetaSetAbilityTrigger", new(proto.AbilityMetaSetAbilityTrigger), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_META_ADD_NEW_ABILITY:
-		ConvClientServerPbData(convType, "AbilityMetaAddAbility", new(proto.AbilityMetaAddAbility), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMetaAddAbility", new(proto.AbilityMetaAddAbility), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_META_SET_MODIFIER_APPLY_ENTITY:
-		ConvClientServerPbData(convType, "AbilityMetaSetModifierApplyEntityId", new(proto.AbilityMetaSetModifierApplyEntityId), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMetaSetModifierApplyEntityId", new(proto.AbilityMetaSetModifierApplyEntityId), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_META_MODIFIER_DURABILITY_CHANGE:
-		ConvClientServerPbData(convType, "AbilityMetaModifierDurabilityChange", new(proto.AbilityMetaModifierDurabilityChange), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMetaModifierDurabilityChange", new(proto.AbilityMetaModifierDurabilityChange), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_META_ELEMENT_REACTION_VISUAL:
-		ConvClientServerPbData(convType, "AbilityMetaElementReactionVisual", new(proto.AbilityMetaElementReactionVisual), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMetaElementReactionVisual", new(proto.AbilityMetaElementReactionVisual), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_META_SET_POSE_PARAMETER:
-		ConvClientServerPbData(convType, "AbilityMetaSetPoseParameter", new(proto.AbilityMetaSetPoseParameter), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMetaSetPoseParameter", new(proto.AbilityMetaSetPoseParameter), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_META_UPDATE_BASE_REACTION_DAMAGE:
-		ConvClientServerPbData(convType, "AbilityMetaUpdateBaseReactionDamage", new(proto.AbilityMetaUpdateBaseReactionDamage), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMetaUpdateBaseReactionDamage", new(proto.AbilityMetaUpdateBaseReactionDamage), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_META_TRIGGER_ELEMENT_REACTION:
-		ConvClientServerPbData(convType, "AbilityMetaTriggerElementReaction", new(proto.AbilityMetaTriggerElementReaction), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMetaTriggerElementReaction", new(proto.AbilityMetaTriggerElementReaction), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_META_LOSE_HP:
-		ConvClientServerPbData(convType, "AbilityMetaLoseHp", new(proto.AbilityMetaLoseHp), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMetaLoseHp", new(proto.AbilityMetaLoseHp), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_META_DURABILITY_IS_ZERO:
-		ConvClientServerPbData(convType, "AbilityMetaDurabilityIsZero", new(proto.AbilityMetaDurabilityIsZero), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMetaDurabilityIsZero", new(proto.AbilityMetaDurabilityIsZero), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_ACTION_TRIGGER_ABILITY:
-		ConvClientServerPbData(convType, "AbilityActionTriggerAbility", new(proto.AbilityActionTriggerAbility), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityActionTriggerAbility", new(proto.AbilityActionTriggerAbility), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_ACTION_SET_CRASH_DAMAGE:
-		ConvClientServerPbData(convType, "AbilityActionSetCrashDamage", new(proto.AbilityActionSetCrashDamage), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityActionSetCrashDamage", new(proto.AbilityActionSetCrashDamage), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_ACTION_SUMMON:
-		ConvClientServerPbData(convType, "AbilityActionSummon", new(proto.AbilityActionSummon), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityActionSummon", new(proto.AbilityActionSummon), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_ACTION_BLINK:
-		ConvClientServerPbData(convType, "AbilityActionBlink", new(proto.AbilityActionBlink), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityActionBlink", new(proto.AbilityActionBlink), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_ACTION_CREATE_GADGET:
-		ConvClientServerPbData(convType, "AbilityActionCreateGadget", new(proto.AbilityActionCreateGadget), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityActionCreateGadget", new(proto.AbilityActionCreateGadget), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_ACTION_APPLY_LEVEL_MODIFIER:
-		ConvClientServerPbData(convType, "AbilityApplyLevelModifier", new(proto.AbilityApplyLevelModifier), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityApplyLevelModifier", new(proto.AbilityApplyLevelModifier), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_ACTION_GENERATE_ELEM_BALL:
-		ConvClientServerPbData(convType, "AbilityActionGenerateElemBall", new(proto.AbilityActionGenerateElemBall), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityActionGenerateElemBall", new(proto.AbilityActionGenerateElemBall), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_ACTION_SET_RANDOM_OVERRIDE_MAP_VALUE:
-		ConvClientServerPbData(convType, "AbilityActionSetRandomOverrideMapValue", new(proto.AbilityActionSetRandomOverrideMapValue), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityActionSetRandomOverrideMapValue", new(proto.AbilityActionSetRandomOverrideMapValue), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_ACTION_SERVER_MONSTER_LOG:
-		ConvClientServerPbData(convType, "AbilityActionServerMonsterLog", new(proto.AbilityActionServerMonsterLog), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityActionServerMonsterLog", new(proto.AbilityActionServerMonsterLog), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_ACTION_CREATE_TILE:
-		ConvClientServerPbData(convType, "AbilityActionCreateTile", new(proto.AbilityActionCreateTile), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityActionCreateTile", new(proto.AbilityActionCreateTile), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_ACTION_DESTROY_TILE:
-		ConvClientServerPbData(convType, "AbilityActionDestroyTile", new(proto.AbilityActionDestroyTile), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityActionDestroyTile", new(proto.AbilityActionDestroyTile), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_ACTION_FIRE_AFTER_IMAGE:
-		ConvClientServerPbData(convType, "AbilityActionFireAfterImgae", new(proto.AbilityActionFireAfterImgae), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityActionFireAfterImgae", new(proto.AbilityActionFireAfterImgae), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_ACTION_DEDUCT_STAMINA:
-		ConvClientServerPbData(convType, "AbilityActionDeductStamina", new(proto.AbilityActionDeductStamina), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityActionDeductStamina", new(proto.AbilityActionDeductStamina), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_ACTION_HIT_EFFECT:
-		ConvClientServerPbData(convType, "AbilityActionHitEffect", new(proto.AbilityActionHitEffect), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityActionHitEffect", new(proto.AbilityActionHitEffect), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_ACTION_SET_BULLET_TRACK_TARGET:
-		ConvClientServerPbData(convType, "AbilityActionSetBulletTrackTarget", new(proto.AbilityActionSetBulletTrackTarget), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityActionSetBulletTrackTarget", new(proto.AbilityActionSetBulletTrackTarget), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_MIXIN_AVATAR_STEER_BY_CAMERA:
-		ConvClientServerPbData(convType, "AbilityMixinAvatarSteerByCamera", new(proto.AbilityMixinAvatarSteerByCamera), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMixinAvatarSteerByCamera", new(proto.AbilityMixinAvatarSteerByCamera), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_MIXIN_WIND_ZONE:
-		ConvClientServerPbData(convType, "AbilityMixinWindZone", new(proto.AbilityMixinWindZone), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMixinWindZone", new(proto.AbilityMixinWindZone), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_MIXIN_COST_STAMINA:
-		ConvClientServerPbData(convType, "AbilityMixinCostStamina", new(proto.AbilityMixinCostStamina), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMixinCostStamina", new(proto.AbilityMixinCostStamina), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_MIXIN_ELEMENT_SHIELD:
-		ConvClientServerPbData(convType, "AbilityMixinElementShield", new(proto.AbilityMixinElementShield), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMixinElementShield", new(proto.AbilityMixinElementShield), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_MIXIN_GLOBAL_SHIELD:
-		ConvClientServerPbData(convType, "AbilityMixinGlobalShield", new(proto.AbilityMixinGlobalShield), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMixinGlobalShield", new(proto.AbilityMixinGlobalShield), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_MIXIN_SHIELD_BAR:
-		ConvClientServerPbData(convType, "AbilityMixinShieldBar", new(proto.AbilityMixinShieldBar), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMixinShieldBar", new(proto.AbilityMixinShieldBar), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_MIXIN_WIND_SEED_SPAWNER:
-		ConvClientServerPbData(convType, "AbilityMixinWindSeedSpawner", new(proto.AbilityMixinWindSeedSpawner), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMixinWindSeedSpawner", new(proto.AbilityMixinWindSeedSpawner), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_MIXIN_DO_ACTION_BY_ELEMENT_REACTION:
-		ConvClientServerPbData(convType, "AbilityMixinDoActionByElementReaction", new(proto.AbilityMixinDoActionByElementReaction), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMixinDoActionByElementReaction", new(proto.AbilityMixinDoActionByElementReaction), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_MIXIN_FIELD_ENTITY_COUNT_CHANGE:
-		ConvClientServerPbData(convType, "AbilityMixinFieldEntityCountChange", new(proto.AbilityMixinFieldEntityCountChange), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMixinFieldEntityCountChange", new(proto.AbilityMixinFieldEntityCountChange), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_MIXIN_SCENE_PROP_SYNC:
-		ConvClientServerPbData(convType, "AbilityMixinScenePropSync", new(proto.AbilityMixinScenePropSync), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMixinScenePropSync", new(proto.AbilityMixinScenePropSync), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_MIXIN_WIDGET_MP_SUPPORT:
-		ConvClientServerPbData(convType, "AbilityMixinWidgetMpSupport", new(proto.AbilityMixinWidgetMpSupport), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMixinWidgetMpSupport", new(proto.AbilityMixinWidgetMpSupport), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_MIXIN_DO_ACTION_BY_SELF_MODIFIER_ELEMENT_DURABILITY_RATIO:
-		ConvClientServerPbData(convType, "AbilityMixinDoActionBySelfModifierElementDurabilityRatio", new(proto.AbilityMixinDoActionBySelfModifierElementDurabilityRatio), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMixinDoActionBySelfModifierElementDurabilityRatio", new(proto.AbilityMixinDoActionBySelfModifierElementDurabilityRatio), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_MIXIN_FIREWORKS_LAUNCHER:
-		ConvClientServerPbData(convType, "AbilityMixinFireworksLauncher", new(proto.AbilityMixinFireworksLauncher), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMixinFireworksLauncher", new(proto.AbilityMixinFireworksLauncher), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_MIXIN_ATTACK_RESULT_CREATE_COUNT:
-		ConvClientServerPbData(convType, "AttackResultCreateCount", new(proto.AttackResultCreateCount), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AttackResultCreateCount", new(proto.AttackResultCreateCount), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_MIXIN_UGC_TIME_CONTROL:
-		ConvClientServerPbData(convType, "AbilityMixinUGCTimeControl", new(proto.AbilityMixinUGCTimeControl), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMixinUGCTimeControl", new(proto.AbilityMixinUGCTimeControl), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_MIXIN_AVATAR_COMBAT:
-		ConvClientServerPbData(convType, "AbilityMixinAvatarCombat", new(proto.AbilityMixinAvatarCombat), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMixinAvatarCombat", new(proto.AbilityMixinAvatarCombat), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_MIXIN_UI_INTERACT:
-		ConvClientServerPbData(convType, "AbilityMixinUIInteract", new(proto.AbilityMixinUIInteract), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMixinUIInteract", new(proto.AbilityMixinUIInteract), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_MIXIN_SHOOT_FROM_CAMERA:
-		ConvClientServerPbData(convType, "AbilityMixinShootFromCamera", new(proto.AbilityMixinShootFromCamera), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMixinShootFromCamera", new(proto.AbilityMixinShootFromCamera), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_MIXIN_ERASE_BRICK_ACTIVITY:
-		ConvClientServerPbData(convType, "AbilityMixinEraseBrickActivity", new(proto.AbilityMixinEraseBrickActivity), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMixinEraseBrickActivity", new(proto.AbilityMixinEraseBrickActivity), &entry.AbilityData, clientProtoProxy)
 	case proto.AbilityInvokeArgument_ABILITY_MIXIN_BREAKOUT:
-		ConvClientServerPbData(convType, "AbilityMixinBreakout", new(proto.AbilityMixinBreakout), &entry.AbilityData, clientCmdProtoMap)
+		ConvClientServerPbData(convType, "AbilityMixinBreakout", new(proto.AbilityMixinBreakout), &entry.AbilityData, clientProtoProxy)
 	}
 }

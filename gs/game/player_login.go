@@ -99,6 +99,8 @@ func (g *Game) OnLogin(userId uint32, clientSeq uint32, gateAppId string, player
 	SELF = player
 
 	player.InitOnlineData()
+	clientVersion, _ := region.GetClientVersionByName(req.ChecksumClientVersion)
+	player.ClientVersion = clientVersion
 
 	if player.GetSceneId() > 100 {
 		player.SceneId = 3
@@ -139,9 +141,6 @@ func (g *Game) OnLogin(userId uint32, clientSeq uint32, gateAppId string, player
 	} else {
 		g.SendMsg(cmd.DoSetPlayerBornDataNotify, userId, clientSeq, new(proto.DoSetPlayerBornDataNotify))
 	}
-
-	clientVersion, _ := region.GetClientVersionByName(req.ChecksumClientVersion)
-	player.ClientVersion = clientVersion
 
 	rsp := &proto.PlayerLoginRsp{
 		IsUseAbilityHash:        true,

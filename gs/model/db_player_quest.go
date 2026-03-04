@@ -26,9 +26,9 @@ type Quest struct {
 
 // ParentQuest 父任务
 type ParentQuest struct {
-	ParentQuestId uint32   // 父任务id
-	State         uint8    // 任务状态
-	QuestVar      [5]int32 // 任务变量
+	ParentQuestId uint32    // 父任务id
+	State         uint8     // 任务状态
+	QuestVar      [10]int32 // 任务变量
 }
 
 func (p *Player) GetDbQuest() *DbQuest {
@@ -286,7 +286,7 @@ func (q *DbQuest) AddParentQuest(parentQuestId uint32) {
 	q.ParentQuestMap[parentQuestId] = &ParentQuest{
 		ParentQuestId: parentQuestId,
 		State:         constant.PARENT_QUEST_STATE_NONE,
-		QuestVar:      [5]int32{0, 0, 0, 0, 0},
+		QuestVar:      [10]int32{0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
 	}
 }
 

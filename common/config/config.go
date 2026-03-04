@@ -39,6 +39,8 @@ type Hk4e struct {
 	ByteCheckMode           int32  `toml:"byte_check_mode"`            // 网络包数据校验模式
 	StandaloneModeEnable    bool   `toml:"standalone_mode_enable"`     // 是否开启单进程模式
 	TrackPacket             bool   `toml:"track_packet"`               // 追踪收发包
+	SdkEnv                  int32  `toml:"sdk_env"`                    // sdk环境 0:国内 1:国内沙箱 2:海外
+	ClientProtoDir          string `toml:"client_proto_dir"`           // 需要代理的客户端协议文件目录
 }
 
 // Hk4eRobot 原神机器人
