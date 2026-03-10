@@ -729,13 +729,9 @@ func (g *Game) handleAbilityInvoke(player *model.Player, entry *proto.AbilityInv
 				return
 			}
 			abilityNameHash := addAbility.Ability.AbilityName.GetHash()
-			if abilityNameHash == 0 {
-				logger.Error("ability name hash is 0, ability: %+v, entityId: %v, uid: %v", addAbility.Ability, entity.GetId(), player.PlayerId)
-				return
-			}
 			abilityDataConfig := gdconf.GetAbilityDataByHash(abilityNameHash)
 			if abilityDataConfig == nil {
-				logger.Error("get abilityDataConfig is nil, abilityNameHash: %v", abilityNameHash)
+				logger.Error("get abilityDataConfig is nil, abilityNameHash: %v, instancedAbilityId: %v, entityId: %v", abilityNameHash, addAbility.Ability.InstancedAbilityId, entity.GetId())
 				return
 			}
 			entity.AddAbility(abilityDataConfig.AbilityName, addAbility.Ability.InstancedAbilityId)

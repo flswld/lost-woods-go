@@ -245,7 +245,7 @@ func ConvNavMeshVecListToPbVecList(navMeshVecList []navmesh.Vector3f) []*proto.V
 func (w *WorldStatic) NavMeshPathfinding(sceneId uint32, startPos *proto.Vector, endPos *proto.Vector) ([]*proto.Vector, bool) {
 	navMeshManager, exist := w.navMeshManagerMap[sceneId]
 	if !exist {
-		logger.Error("navmesh scene not exist, sceneId: %v", sceneId)
+		logger.Debug("navmesh scene not exist, sceneId: %v", sceneId)
 		return nil, false
 	}
 	var hit navmesh.NavMeshHit

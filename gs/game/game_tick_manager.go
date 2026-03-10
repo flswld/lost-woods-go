@@ -197,7 +197,6 @@ func (t *TickManager) OnGameServerTick() {
 			// 跳过还没到时间的定时器
 			continue
 		}
-		<-userTick.globalTick.C
 		userTick.globalTickCount++
 		if userTick.globalTickCount%(1000/UserTickTime) == 0 {
 			t.onUserTickSecond(userId, now)

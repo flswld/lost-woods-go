@@ -621,6 +621,10 @@ func (g *Game) UpdatePlayerAvatarFightProp(userId uint32, avatarId uint32) {
 	}
 	dbAvatar.UpdateAvatarFightProp(avatar)
 
+	if player.NoCd {
+		avatar.FightPropMap[constant.FIGHT_PROP_SKILL_CD_MINUS_RATIO] = float32(1.0)
+	}
+
 	entityId := world.GetPlayerWorldAvatarEntityId(player, avatar.AvatarId)
 	if entityId != 0 {
 		scene := world.GetSceneById(player.GetSceneId())

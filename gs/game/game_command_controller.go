@@ -29,22 +29,25 @@ func (c *CommandManager) InitController() {
 	controllerList := []*CommandController{
 		c.NewAssignCommandController(),
 		c.NewHelpCommandController(),
+		c.NewWudiCommandController(),
+		c.NewEnergyCommandController(),
+		c.NewStaminaCommandController(),
+		c.NewNoCdCommandController(),
 		c.NewGotoCommandController(),
 		c.NewJumpCommandController(),
+		c.NewAvatarCommandController(),
 		c.NewEquipCommandController(),
 		c.NewItemCommandController(),
-		c.NewAvatarCommandController(),
 		c.NewKillCommandController(),
 		c.NewMonsterCommandController(),
 		c.NewGadgetCommandController(),
 		c.NewQuestCommandController(),
 		c.NewPointCommandController(),
+		c.NewAreaCommandController(),
 		c.NewWeatherCommandController(),
+		c.NewOpenStateCommandController(),
 		c.NewClearCommandController(),
 		c.NewDebugCommandController(),
-		c.NewWudiCommandController(),
-		c.NewEnergyCommandController(),
-		c.NewStaminaCommandController(),
 	}
 	c.RegAllController(controllerList...)
 }
@@ -163,7 +166,7 @@ func (c *CommandManager) HelpCommand(content *CommandContent) bool {
 				}
 				helpText += fmt.Sprintf("<color=%v>%v. %v</color> <color=#FFE5CC>-</color> %v\n", permColor, commandIndex, commandController.Name, strings.ReplaceAll(commandController.Description, "{alias}", commandController.AliasList[0]))
 			}
-			helpText += fmt.Sprintf("\n<color=#CCE5FF>当前第 %v 页，共 %v 页~</color>", page, maxPages)
+			helpText += fmt.Sprintf("\n<color=#CCE5FF>当前第 %v 页，共 %v 页，help命令后加页码翻页~</color>", page, maxPages)
 			// 发送帮助文本
 			content.SendMessage(content.Executor, helpText)
 			return true
@@ -183,6 +186,212 @@ func (c *CommandManager) HelpCommand(content *CommandContent) bool {
 			return true
 		}
 		return false
+	})
+}
+
+// 无敌命令
+
+func (c *CommandManager) NewWudiCommandController() *CommandController {
+	return &CommandController{
+		Name:        "无敌",
+		AliasList:   []string{"wudi"},
+		Description: "<color=#FFFFCC>{alias}</color> <color=#FFCC99>无敌</color>",
+		UsageList: []string{
+			"{alias} global avatar <on/off> 开关玩家无敌",
+			"{alias} global monster <on/off> 开关怪物无敌",
+		},
+		Perm: CommandPermNormal,
+		Func: c.WudiCommand,
+	}
+}
+
+func (c *CommandManager) WudiCommand(content *CommandContent) bool {
+	var mode1 string  // 模式
+	var mode2 string  // 模式
+	var param1 string // 参数
+
+	return content.Dynamic("string", func(param any) bool {
+		// 模式
+		mode1 = param.(string)
+		return true
+	}).Dynamic("string", func(param any) bool {
+		// 模式
+		mode2 = param.(string)
+		return true
+	}).Option("string", func(param any) bool {
+		// 参数1
+		param1 = param.(string)
+		return true
+	}).Execute(func() bool {
+		switch mode1 {
+		case "global":
+			switch mode2 {
+			case "avatar":
+				switch param1 {
+				case "on":
+					c.gmCmd.GMSetPlayerWuDi(content.AssignPlayer.PlayerId, true)
+					content.SendSuccMessage(content.Executor, "已开启玩家无敌，指定UID：%v。", content.AssignPlayer.PlayerId)
+					return true
+				case "off":
+					c.gmCmd.GMSetPlayerWuDi(content.AssignPlayer.PlayerId, false)
+					content.SendSuccMessage(content.Executor, "已关闭玩家无敌，指定UID：%v。", content.AssignPlayer.PlayerId)
+					return true
+				default:
+					return false
+				}
+			case "monster":
+				switch param1 {
+				case "on":
+					c.gmCmd.GMSetMonsterWudi(content.AssignPlayer.PlayerId, true)
+					content.SendSuccMessage(content.Executor, "已开启怪物无敌，指定UID：%v。", content.AssignPlayer.PlayerId)
+					return true
+				case "off":
+					c.gmCmd.GMSetMonsterWudi(content.AssignPlayer.PlayerId, false)
+					content.SendSuccMessage(content.Executor, "已关闭怪物无敌，指定UID：%v。", content.AssignPlayer.PlayerId)
+					return true
+				default:
+					return false
+				}
+			default:
+				return false
+			}
+		default:
+			return false
+		}
+	})
+}
+
+// 元素能量命令
+
+func (c *CommandManager) NewEnergyCommandController() *CommandController {
+	return &CommandController{
+		Name:        "元素能量",
+		AliasList:   []string{"energy"},
+		Description: "<color=#FFFFCC>{alias}</color> <color=#FFCC99>元素能量</color>",
+		UsageList: []string{
+			"{alias} infinite <on/off> 开关无限元素爆发",
+		},
+		Perm: CommandPermNormal,
+		Func: c.EnergyCommand,
+	}
+}
+
+func (c *CommandManager) EnergyCommand(content *CommandContent) bool {
+	var mode1 string  // 模式
+	var param1 string // 参数
+
+	return content.Dynamic("string", func(param any) bool {
+		// 模式
+		mode1 = param.(string)
+		return true
+	}).Option("string", func(param any) bool {
+		// 参数1
+		param1 = param.(string)
+		return true
+	}).Execute(func() bool {
+		switch mode1 {
+		case "infinite":
+			switch param1 {
+			case "on":
+				c.gmCmd.GMSetPlayerEnergyInf(content.AssignPlayer.PlayerId, true)
+				content.SendSuccMessage(content.Executor, "已开启无限元素爆发，指定UID：%v。", content.AssignPlayer.PlayerId)
+				return true
+			case "off":
+				c.gmCmd.GMSetPlayerEnergyInf(content.AssignPlayer.PlayerId, false)
+				content.SendSuccMessage(content.Executor, "已关闭无限元素爆发，指定UID：%v。", content.AssignPlayer.PlayerId)
+				return true
+			default:
+				return false
+			}
+		default:
+			return false
+		}
+	})
+}
+
+// 耐力命令
+
+func (c *CommandManager) NewStaminaCommandController() *CommandController {
+	return &CommandController{
+		Name:        "耐力",
+		AliasList:   []string{"stamina"},
+		Description: "<color=#FFFFCC>{alias}</color> <color=#FFCC99>耐力</color>",
+		UsageList: []string{
+			"{alias} infinite <on/off> 开关无限耐力",
+		},
+		Perm: CommandPermNormal,
+		Func: c.StaminaCommand,
+	}
+}
+
+func (c *CommandManager) StaminaCommand(content *CommandContent) bool {
+	var mode1 string  // 模式
+	var param1 string // 参数
+
+	return content.Dynamic("string", func(param any) bool {
+		// 模式
+		mode1 = param.(string)
+		return true
+	}).Option("string", func(param any) bool {
+		// 参数1
+		param1 = param.(string)
+		return true
+	}).Execute(func() bool {
+		switch mode1 {
+		case "infinite":
+			switch param1 {
+			case "on":
+				c.gmCmd.GMSetPlayerStaminaInf(content.AssignPlayer.PlayerId, true)
+				content.SendSuccMessage(content.Executor, "已开启无限耐力，指定UID：%v。", content.AssignPlayer.PlayerId)
+				return true
+			case "off":
+				c.gmCmd.GMSetPlayerStaminaInf(content.AssignPlayer.PlayerId, false)
+				content.SendSuccMessage(content.Executor, "已关闭无限耐力，指定UID：%v。", content.AssignPlayer.PlayerId)
+				return true
+			default:
+				return false
+			}
+		default:
+			return false
+		}
+	})
+}
+
+// 无冷却命令
+
+func (c *CommandManager) NewNoCdCommandController() *CommandController {
+	return &CommandController{
+		Name:        "无冷却",
+		AliasList:   []string{"nocd"},
+		Description: "<color=#FFFFCC>{alias}</color> <color=#FFCC99>无冷却</color>",
+		UsageList: []string{
+			"{alias} <on/off> 开关无冷却",
+		},
+		Perm: CommandPermNormal,
+		Func: c.NoCdCommand,
+	}
+}
+
+func (c *CommandManager) NoCdCommand(content *CommandContent) bool {
+	var param1 string // 参数
+
+	return content.Option("string", func(param any) bool {
+		// 参数1
+		param1 = param.(string)
+		return true
+	}).Execute(func() bool {
+		switch param1 {
+		case "on":
+			c.gmCmd.GMSetPlayerNoCd(content.AssignPlayer.PlayerId, true)
+			content.SendSuccMessage(content.Executor, "已开启无冷却，指定UID：%v。", content.AssignPlayer.PlayerId)
+			return true
+		case "off":
+			c.gmCmd.GMSetPlayerNoCd(content.AssignPlayer.PlayerId, false)
+			content.SendSuccMessage(content.Executor, "已关闭无冷却，指定UID：%v。", content.AssignPlayer.PlayerId)
+			return true
+		default:
+			return false
+		}
 	})
 }
 
@@ -296,6 +505,57 @@ func (c *CommandManager) JumpCommand(content *CommandContent) bool {
 		c.gmCmd.GMTeleportPlayer(content.AssignPlayer.PlayerId, sceneId, posX, posY, posZ)
 		// 发送消息给执行者
 		content.SendSuccMessage(content.Executor, "已传送至指定场景，指定UID：%v，场景ID：%v，X：%.2f，Y：%.2f，Z：%.2f。", content.AssignPlayer.PlayerId, content.AssignPlayer.GetSceneId(), posX, posY, posZ)
+		return true
+	})
+}
+
+// 管理角色命令
+
+func (c *CommandManager) NewAvatarCommandController() *CommandController {
+	return &CommandController{
+		Name:        "角色",
+		AliasList:   []string{"avatar"},
+		Description: "<color=#FFFFCC>{alias}</color> <color=#FFCC99>角色</color>",
+		UsageList: []string{
+			"{alias} add <角色ID/all>",
+		},
+		Perm: CommandPermNormal,
+		Func: c.AvatarCommand,
+	}
+}
+
+func (c *CommandManager) AvatarCommand(content *CommandContent) bool {
+	var mode string   // 模式
+	var param1 string // 参数1
+
+	return content.Dynamic("string", func(param any) bool {
+		// 模式
+		mode = param.(string)
+		return true
+	}).Dynamic("string", func(param any) bool {
+		// 参数1
+		param1 = param.(string)
+		return true
+	}).Execute(func() bool {
+		switch mode {
+		case "add":
+			// 添加角色
+			// 判断是否要添加全部角色
+			if param1 == "all" {
+				c.gmCmd.GMAddAllAvatar(content.AssignPlayer.PlayerId, 1, 0)
+				content.SendSuccMessage(content.Executor, "已添加所有角色，指定UID：%v。", content.AssignPlayer.PlayerId)
+				return true
+			}
+			// 角色id
+			avatarId, err := strconv.ParseUint(param1, 10, 32)
+			if err != nil {
+				return false
+			}
+			c.gmCmd.GMAddAvatar(content.AssignPlayer.PlayerId, uint32(avatarId), 1, 0)
+			content.SendSuccMessage(content.Executor, "已添加角色，指定UID：%v，角色ID：%v。", content.AssignPlayer.PlayerId, avatarId)
+		default:
+			return false
+		}
 		return true
 	})
 }
@@ -455,57 +715,6 @@ func (c *CommandManager) ItemCommand(content *CommandContent) bool {
 	})
 }
 
-// 管理角色命令
-
-func (c *CommandManager) NewAvatarCommandController() *CommandController {
-	return &CommandController{
-		Name:        "角色",
-		AliasList:   []string{"avatar"},
-		Description: "<color=#FFFFCC>{alias}</color> <color=#FFCC99>角色</color>",
-		UsageList: []string{
-			"{alias} add <角色ID/all>",
-		},
-		Perm: CommandPermNormal,
-		Func: c.AvatarCommand,
-	}
-}
-
-func (c *CommandManager) AvatarCommand(content *CommandContent) bool {
-	var mode string   // 模式
-	var param1 string // 参数1
-
-	return content.Dynamic("string", func(param any) bool {
-		// 模式
-		mode = param.(string)
-		return true
-	}).Dynamic("string", func(param any) bool {
-		// 参数1
-		param1 = param.(string)
-		return true
-	}).Execute(func() bool {
-		switch mode {
-		case "add":
-			// 添加角色
-			// 判断是否要添加全部角色
-			if param1 == "all" {
-				c.gmCmd.GMAddAllAvatar(content.AssignPlayer.PlayerId, 1, 0)
-				content.SendSuccMessage(content.Executor, "已添加所有角色，指定UID：%v。", content.AssignPlayer.PlayerId)
-				return true
-			}
-			// 角色id
-			avatarId, err := strconv.ParseUint(param1, 10, 32)
-			if err != nil {
-				return false
-			}
-			c.gmCmd.GMAddAvatar(content.AssignPlayer.PlayerId, uint32(avatarId), 1, 0)
-			content.SendSuccMessage(content.Executor, "已添加角色，指定UID：%v，角色ID：%v。", content.AssignPlayer.PlayerId, avatarId)
-		default:
-			return false
-		}
-		return true
-	})
-}
-
 // 杀死实体命令
 
 func (c *CommandManager) NewKillCommandController() *CommandController {
@@ -577,7 +786,7 @@ func (c *CommandManager) NewMonsterCommandController() *CommandController {
 		AliasList:   []string{"monster"},
 		Description: "<color=#FFFFCC>{alias}</color> <color=#FFCC99>怪物</color>",
 		UsageList: []string{
-			"{alias} <怪物ID> [数量] [等级] [姿势 (暂时无效)] [坐标X] [坐标Y] [坐标Z] 生成怪物",
+			"{alias} <怪物ID> [数量] [等级] [姿势] [坐标X] [坐标Y] [坐标Z] 生成怪物",
 		},
 		Perm: CommandPermNormal,
 		Func: c.MonsterCommand,
@@ -588,7 +797,7 @@ func (c *CommandManager) MonsterCommand(content *CommandContent) bool {
 	var monsterId uint32 // 怪物id
 	var count uint32 = 1 // 数量
 	var level uint8 = 1  // 等级
-	// var pose uint32      // 姿势
+	var pose uint32      // 姿势
 	pos := GAME.GetPlayerPos(content.AssignPlayer)
 	var posX = pos.X // 坐标x
 	var posY = pos.Y // 坐标y
@@ -604,7 +813,7 @@ func (c *CommandManager) MonsterCommand(content *CommandContent) bool {
 		level = param.(uint8)
 		return true
 	}).Option("uint32", func(param any) bool {
-		// pose = param.(uint32)
+		pose = param.(uint32)
 		return true
 	}).Option("float64", func(param any) bool {
 		posX = param.(float64)
@@ -616,6 +825,7 @@ func (c *CommandManager) MonsterCommand(content *CommandContent) bool {
 		posZ = param.(float64)
 		return true
 	}).Execute(func() bool {
+		_ = pose
 		c.gmCmd.GMCreateMonster(content.AssignPlayer.PlayerId, monsterId, posX, posY, posZ, count, level)
 		return true
 	})
@@ -763,6 +973,51 @@ func (c *CommandManager) PointCommand(content *CommandContent) bool {
 	})
 }
 
+// 解锁区域命令
+
+func (c *CommandManager) NewAreaCommandController() *CommandController {
+	return &CommandController{
+		Name:        "区域",
+		AliasList:   []string{"area"},
+		Description: "<color=#FFFFCC>{alias}</color> <color=#FFCC99>区域</color>",
+		UsageList: []string{
+			"{alias} [场景ID] <区域ID/all> 解锁区域",
+		},
+		Perm: CommandPermNormal,
+		Func: c.AreaCommand,
+	}
+}
+
+func (c *CommandManager) AreaCommand(content *CommandContent) bool {
+	var sceneId = content.AssignPlayer.GetSceneId() // 场景id
+	var param1 string                               // 参数1
+
+	return content.Option("uint32", func(param any) bool {
+		// 场景id
+		sceneId = param.(uint32)
+		return true
+	}).Dynamic("string", func(param any) bool {
+		// 参数1
+		param1 = param.(string)
+		return true
+	}).Execute(func() bool {
+		if param1 == "all" {
+			// 解锁当前场景所有区域
+			c.gmCmd.GMUnlockAllArea(content.AssignPlayer.PlayerId, sceneId)
+			content.SendSuccMessage(content.Executor, "已解锁所有区域，指定UID：%v，场景ID：%v。", content.AssignPlayer.PlayerId, sceneId)
+			return true
+		}
+		// 区域id
+		areaId, err := strconv.ParseUint(param1, 10, 32)
+		if err != nil {
+			return false
+		}
+		c.gmCmd.GMUnlockArea(content.AssignPlayer.PlayerId, sceneId, uint32(areaId))
+		content.SendSuccMessage(content.Executor, "已解锁区域，指定UID：%v，场景ID：%v，区域ID：%v。", content.AssignPlayer.PlayerId, sceneId, areaId)
+		return true
+	})
+}
+
 // 更改天气命令
 
 func (c *CommandManager) NewWeatherCommandController() *CommandController {
@@ -789,6 +1044,49 @@ func (c *CommandManager) WeatherCommand(content *CommandContent) bool {
 		// 设置天气
 		c.gmCmd.GMSetWeather(content.AssignPlayer.PlayerId, climateType)
 		content.SendSuccMessage(content.Executor, "已更改天气，指定UID：%v，气象类型：%v。", content.AssignPlayer.PlayerId, climateType)
+		return true
+	})
+}
+
+// 功能开放命令
+
+func (c *CommandManager) NewOpenStateCommandController() *CommandController {
+	return &CommandController{
+		Name:        "功能开放",
+		AliasList:   []string{"openstate"},
+		Description: "<color=#FFFFCC>{alias}</color> <color=#FFCC99>功能开放</color>",
+		UsageList: []string{
+			"{alias} <功能ID/all> <1/0> 设置功能开放值",
+		},
+		Perm: CommandPermNormal,
+		Func: c.OpenStateCommand,
+	}
+}
+
+func (c *CommandManager) OpenStateCommand(content *CommandContent) bool {
+	var param1 string // 参数1
+	var param2 int    // 参数2
+
+	return content.Dynamic("string", func(param any) bool {
+		// 参数1
+		param1 = param.(string)
+		return true
+	}).Dynamic("int", func(param any) bool {
+		// 参数2
+		param2 = param.(int)
+		return true
+	}).Execute(func() bool {
+		if param1 == "all" {
+			c.gmCmd.GMSetAllOpenState(content.AssignPlayer.PlayerId, uint32(param2))
+			content.SendSuccMessage(content.Executor, "已设置全部功能开放值，指定UID：%v，值：%v。", content.AssignPlayer.PlayerId, param2)
+			return true
+		}
+		openStateId, err := strconv.ParseUint(param1, 10, 32)
+		if err != nil {
+			return false
+		}
+		c.gmCmd.GMSetOpenState(content.AssignPlayer.PlayerId, uint32(openStateId), uint32(param2))
+		content.SendSuccMessage(content.Executor, "已设置功能开放值，指定UID：%v，功能开放ID：%v，值：%v。", content.AssignPlayer.PlayerId, openStateId, param2)
 		return true
 	})
 }
@@ -836,8 +1134,6 @@ func (c *CommandManager) NewDebugCommandController() *CommandController {
 		Description: "<color=#FFFFCC>{alias}</color> <color=#FFCC99>调试</color>",
 		UsageList: []string{
 			"{alias} freemode 自由探索模式",
-			"{alias} openstate 解锁全部功能",
-			"{alias} unlockarea 解锁全部地图区域",
 			"{alias} clearworld 清除大世界数据",
 			"{alias} notsave 本次离线回档",
 			"{alias} xluaswitch 开关xLua",
@@ -861,20 +1157,6 @@ func (c *CommandManager) DebugCommand(content *CommandContent) bool {
 			c.gmCmd.GMFreeMode(content.AssignPlayer.PlayerId)
 			content.SendSuccMessage(content.Executor, "已开启自由探索模式，指定UID：%v。", content.AssignPlayer.PlayerId)
 			return true
-		case "openstate":
-			c.gmCmd.GMUnlockAllOpenState(content.AssignPlayer.PlayerId)
-			content.SendSuccMessage(content.Executor, "已解锁全部功能，指定UID：%v。", content.AssignPlayer.PlayerId)
-			return true
-		case "unlockarea":
-			c.gmCmd.GMUnlockAllArea(content.AssignPlayer.PlayerId, 1)
-			c.gmCmd.GMUnlockAllArea(content.AssignPlayer.PlayerId, 3)
-			c.gmCmd.GMUnlockAllArea(content.AssignPlayer.PlayerId, 4)
-			c.gmCmd.GMUnlockAllArea(content.AssignPlayer.PlayerId, 5)
-			c.gmCmd.GMUnlockAllArea(content.AssignPlayer.PlayerId, 6)
-			c.gmCmd.GMUnlockAllArea(content.AssignPlayer.PlayerId, 7)
-			c.gmCmd.GMUnlockAllArea(content.AssignPlayer.PlayerId, 9)
-			content.SendSuccMessage(content.Executor, "已解锁全部地图区域，指定UID：%v。", content.AssignPlayer.PlayerId)
-			return true
 		case "clearworld":
 			c.gmCmd.GMClearWorld(content.AssignPlayer.PlayerId)
 			content.SendSuccMessage(content.Executor, "已清除大世界数据，指定UID：%v。", content.AssignPlayer.PlayerId)
@@ -896,168 +1178,6 @@ func (c *CommandManager) DebugCommand(content *CommandContent) bool {
 			GAME.GCGStartChallenge(content.AssignPlayer)
 			content.SendSuccMessage(content.Executor, "已开始七圣召唤对局，指定UID：%v。", content.AssignPlayer.PlayerId)
 			return true
-		default:
-			return false
-		}
-	})
-}
-
-func (c *CommandManager) NewWudiCommandController() *CommandController {
-	return &CommandController{
-		Name:        "无敌",
-		AliasList:   []string{"wudi"},
-		Description: "<color=#FFFFCC>{alias}</color> <color=#FFCC99>无敌</color>",
-		UsageList: []string{
-			"{alias} global avatar <on/off> 开关玩家无敌",
-			"{alias} global monster <on/off> 开关怪物无敌",
-		},
-		Perm: CommandPermNormal,
-		Func: c.WudiCommand,
-	}
-}
-
-func (c *CommandManager) WudiCommand(content *CommandContent) bool {
-	var mode1 string  // 模式
-	var mode2 string  // 模式
-	var param1 string // 参数
-
-	return content.Dynamic("string", func(param any) bool {
-		// 模式
-		mode1 = param.(string)
-		return true
-	}).Dynamic("string", func(param any) bool {
-		// 模式
-		mode2 = param.(string)
-		return true
-	}).Option("string", func(param any) bool {
-		// 参数1
-		param1 = param.(string)
-		return true
-	}).Execute(func() bool {
-		switch mode1 {
-		case "global":
-			switch mode2 {
-			case "avatar":
-				switch param1 {
-				case "on":
-					c.gmCmd.GMSetPlayerWuDi(content.AssignPlayer.PlayerId, true)
-					content.SendSuccMessage(content.Executor, "已开启玩家无敌，指定UID：%v。", content.AssignPlayer.PlayerId)
-					return true
-				case "off":
-					c.gmCmd.GMSetPlayerWuDi(content.AssignPlayer.PlayerId, false)
-					content.SendSuccMessage(content.Executor, "已关闭玩家无敌，指定UID：%v。", content.AssignPlayer.PlayerId)
-					return true
-				default:
-					return false
-				}
-			case "monster":
-				switch param1 {
-				case "on":
-					c.gmCmd.GMSetMonsterWudi(content.AssignPlayer.PlayerId, true)
-					content.SendSuccMessage(content.Executor, "已开启怪物无敌，指定UID：%v。", content.AssignPlayer.PlayerId)
-					return true
-				case "off":
-					c.gmCmd.GMSetMonsterWudi(content.AssignPlayer.PlayerId, false)
-					content.SendSuccMessage(content.Executor, "已关闭怪物无敌，指定UID：%v。", content.AssignPlayer.PlayerId)
-					return true
-				default:
-					return false
-				}
-			default:
-				return false
-			}
-		default:
-			return false
-		}
-	})
-}
-
-func (c *CommandManager) NewEnergyCommandController() *CommandController {
-	return &CommandController{
-		Name:        "元素能量",
-		AliasList:   []string{"energy"},
-		Description: "<color=#FFFFCC>{alias}</color> <color=#FFCC99>元素能量</color>",
-		UsageList: []string{
-			"{alias} infinite <on/off> 开关无限元素爆发",
-		},
-		Perm: CommandPermNormal,
-		Func: c.EnergyCommand,
-	}
-}
-
-func (c *CommandManager) EnergyCommand(content *CommandContent) bool {
-	var mode1 string  // 模式
-	var param1 string // 参数
-
-	return content.Dynamic("string", func(param any) bool {
-		// 模式
-		mode1 = param.(string)
-		return true
-	}).Option("string", func(param any) bool {
-		// 参数1
-		param1 = param.(string)
-		return true
-	}).Execute(func() bool {
-		switch mode1 {
-		case "infinite":
-			switch param1 {
-			case "on":
-				c.gmCmd.GMSetPlayerEnergyInf(content.AssignPlayer.PlayerId, true)
-				content.SendSuccMessage(content.Executor, "已开启无限元素爆发，指定UID：%v。", content.AssignPlayer.PlayerId)
-				return true
-			case "off":
-				c.gmCmd.GMSetPlayerEnergyInf(content.AssignPlayer.PlayerId, false)
-				content.SendSuccMessage(content.Executor, "已关闭无限元素爆发，指定UID：%v。", content.AssignPlayer.PlayerId)
-				return true
-			default:
-				return false
-			}
-		default:
-			return false
-		}
-	})
-}
-
-func (c *CommandManager) NewStaminaCommandController() *CommandController {
-	return &CommandController{
-		Name:        "耐力",
-		AliasList:   []string{"stamina"},
-		Description: "<color=#FFFFCC>{alias}</color> <color=#FFCC99>耐力</color>",
-		UsageList: []string{
-			"{alias} infinite <on/off> 开关无限耐力",
-		},
-		Perm: CommandPermNormal,
-		Func: c.StaminaCommand,
-	}
-}
-
-func (c *CommandManager) StaminaCommand(content *CommandContent) bool {
-	var mode1 string  // 模式
-	var param1 string // 参数
-
-	return content.Dynamic("string", func(param any) bool {
-		// 模式
-		mode1 = param.(string)
-		return true
-	}).Option("string", func(param any) bool {
-		// 参数1
-		param1 = param.(string)
-		return true
-	}).Execute(func() bool {
-		switch mode1 {
-		case "infinite":
-			switch param1 {
-			case "on":
-				c.gmCmd.GMSetPlayerStaminaInf(content.AssignPlayer.PlayerId, true)
-				content.SendSuccMessage(content.Executor, "已开启无限耐力，指定UID：%v。", content.AssignPlayer.PlayerId)
-				return true
-			case "off":
-				c.gmCmd.GMSetPlayerStaminaInf(content.AssignPlayer.PlayerId, false)
-				content.SendSuccMessage(content.Executor, "已关闭无限耐力，指定UID：%v。", content.AssignPlayer.PlayerId)
-				return true
-			default:
-				return false
-			}
 		default:
 			return false
 		}

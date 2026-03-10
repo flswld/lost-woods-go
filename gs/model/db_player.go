@@ -84,6 +84,7 @@ type Player struct {
 	WuDi                  bool                                     `bson:"-" msgpack:"-"` // 是否开启玩家角色无敌
 	EnergyInf             bool                                     `bson:"-" msgpack:"-"` // 是否开启玩家角色无限能量
 	StaminaInf            bool                                     `bson:"-" msgpack:"-"` // 是否开启玩家无限耐力
+	NoCd                  bool                                     `bson:"-" msgpack:"-"` // 是否开启玩家无冷却
 	IsInMp                bool                                     `bson:"-" msgpack:"-"` // 是否位于多人世界
 	MpSceneId             uint32                                   `bson:"-" msgpack:"-"` // 多人世界场景
 	MpPos                 *Vector                                  `bson:"-" msgpack:"-"` // 多人世界坐标

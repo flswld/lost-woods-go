@@ -223,21 +223,15 @@ func (c *CommandContent) Option(typeStr string, stepFunc CommandContentStepFunc)
 
 // Execute 执行命令实际业务并返回结果
 func (c *CommandContent) Execute(thenFunc func() bool) bool {
-	// 当前参数不能被执行的数量
-	excludeParamCount := len(c.ParamList) - len(c.stepList)
-	// 获取可选参数的数量
-	optionStepCount := 0
+	// 获取必填参数的数量
+	dynamicStepCount := 0
 	for _, step := range c.stepList {
-		if step.StepType == CommandContentStepTypeOption {
-			optionStepCount++
+		if step.StepType == CommandContentStepTypeDynamic {
+			dynamicStepCount++
 		}
 	}
-	// 可选参数可执行的数量
-	optionExecCount := optionStepCount - excludeParamCount
-	// 如果不能执行的参数数量为负数代表可执行的可选参数为0
-	if excludeParamCount < 0 {
-		optionExecCount = 0
-	}
+	// 计算可选参数可执行的数量
+	optionExecCount := len(c.ParamList) - dynamicStepCount
 	// 可选参数可执行的数量为负数代表肯定有个必填参数缺少
 	if optionExecCount < 0 {
 		return false

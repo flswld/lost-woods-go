@@ -488,17 +488,27 @@ func (g *GMCmd) GMNotSave(userId uint32) {
 	player.NotSave = true
 }
 
-// GMUnlockAllOpenState 解锁全部功能开放状态
-func (g *GMCmd) GMUnlockAllOpenState(userId uint32) {
+// GMSetAllOpenState 设置全部功能开放状态
+func (g *GMCmd) GMSetAllOpenState(userId uint32, value uint32) {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {
 		logger.Error("player is nil, uid: %v", userId)
 		return
 	}
 	for _, openStateData := range gdconf.GetOpenStateDataMap() {
-		player.OpenStateMap[uint32(openStateData.OpenStateId)] = 1
+		player.OpenStateMap[uint32(openStateData.OpenStateId)] = value
 	}
 	GAME.LogoutPlayer(userId)
+}
+
+// GMSetOpenState 设置功能开放状态
+func (g *GMCmd) GMSetOpenState(userId uint32, openStateId uint32, value uint32) {
+	player := USER_MANAGER.GetOnlineUser(userId)
+	if player == nil {
+		logger.Error("player is nil, uid: %v", userId)
+		return
+	}
+	player.OpenStateMap[openStateId] = value
 }
 
 // GMAddAllSceneTag 解锁全部场景标签
@@ -610,6 +620,24 @@ func (g *GMCmd) GMSetPlayerStaminaInf(userId uint32, open bool) {
 		return
 	}
 	player.StaminaInf = open
+}
+
+// GMSetPlayerNoCd 开启关闭玩家无冷却
+func (g *GMCmd) GMSetPlayerNoCd(userId uint32, open bool) {
+	player := USER_MANAGER.GetOnlineUser(userId)
+	if player == nil {
+		logger.Error("player is nil, uid: %v", userId)
+		return
+	}
+	player.NoCd = open
+	world := WORLD_MANAGER.GetWorldById(player.WorldId)
+	if world == nil {
+		logger.Error("world is nil, worldId: %v, uid: %v", player.WorldId, player.PlayerId)
+		return
+	}
+	for _, worldAvatar := range world.GetPlayerWorldAvatarList(player) {
+		GAME.UpdatePlayerAvatarFightProp(player.PlayerId, worldAvatar.GetAvatarId())
+	}
 }
 
 // 系统级GM指令

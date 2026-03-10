@@ -9,6 +9,7 @@ import (
 	"hk4e/common/constant"
 	"hk4e/gdconf"
 	"hk4e/gs/model"
+	"hk4e/pkg/endec"
 	"hk4e/pkg/random"
 	"hk4e/protocol/cmd"
 	"hk4e/protocol/proto"
@@ -553,6 +554,7 @@ func (p *PluginPubg) StartPubg() {
 		player.WuDi = false
 		player.EnergyInf = false
 		player.StaminaInf = true
+		player.NoCd = false
 	}
 }
 
@@ -755,7 +757,7 @@ func (p *PluginPubg) PubgHit(scene *Scene, defAvatarEntityId uint32, atkAvatarEn
 			DamageShield:      dmg,
 			HitEffResult:      &proto.AttackHitEffectResult{},
 			ResolvedDir:       &proto.Vector{},
-			HashedAnimEventId: 2152758737,
+			HashedAnimEventId: uint32(endec.Hk4eAbilityHashCode("ATK01")),
 			HitCollision: &proto.HitCollision{
 				HitPoint: &proto.Vector{X: float32(pos.X), Y: float32(pos.Y), Z: float32(pos.Z)},
 				HitDir:   &proto.Vector{},
