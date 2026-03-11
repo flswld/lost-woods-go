@@ -238,6 +238,9 @@ func (g *Game) AddPlayerItem(userId uint32, itemList []*ChangeItem, hintReason p
 		if itemDataConfig == nil {
 			continue
 		}
+		if object.ConvInt64ToBool(int64(itemDataConfig.AutoUse)) {
+			continue
+		}
 		pbItemHint := &proto.ItemHint{
 			ItemId: itemId,
 			Count:  addCount,
@@ -250,9 +253,6 @@ func (g *Game) AddPlayerItem(userId uint32, itemList []*ChangeItem, hintReason p
 		case constant.ITEM_TYPE_RELIQUARY:
 			g.AddPlayerReliquary(player.PlayerId, itemId)
 		case constant.ITEM_TYPE_VIRTUAL, constant.ITEM_TYPE_MATERIAL, constant.ITEM_TYPE_FURNITURE:
-			if object.ConvInt64ToBool(int64(itemDataConfig.AutoUse)) {
-				continue
-			}
 			prop, exist := constant.VIRTUAL_ITEM_PROP[itemId]
 			if exist {
 				// 物品为虚拟物品 角色属性物品数量增加

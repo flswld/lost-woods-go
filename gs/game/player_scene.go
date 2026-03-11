@@ -848,44 +848,6 @@ func (g *Game) EntityFightPropUpdateNotifyBroadcast(scene *Scene, entity IEntity
 	g.SendToSceneA(scene, cmd.EntityFightPropUpdateNotify, 0, ntf, 0)
 }
 
-// KillPlayerAvatar 杀死玩家角色实体
-func (g *Game) KillPlayerAvatar(player *model.Player, avatarId uint32, dieType proto.PlayerDieType) {
-	dbAvatar := player.GetDbAvatar()
-	avatar := dbAvatar.GetAvatarById(avatarId)
-	if avatar == nil {
-		logger.Error("get avatar is nil, avatarId: %v", avatarId)
-		return
-	}
-	world := WORLD_MANAGER.GetWorldById(player.WorldId)
-	if world == nil {
-		return
-	}
-	worldAvatar := world.GetPlayerWorldAvatar(player, avatarId)
-	if worldAvatar == nil {
-		return
-	}
-	scene := world.GetSceneById(player.GetSceneId())
-	entity := scene.GetEntity(worldAvatar.GetAvatarEntityId())
-
-	avatar.LifeState = constant.LIFE_STATE_DEAD
-	avatar.FightPropMap[constant.FIGHT_PROP_CUR_HP] = 0.0
-
-	g.EntityFightPropUpdateNotifyBroadcast(scene, entity)
-
-	activeAvatarId := world.GetPlayerActiveAvatarId(player)
-	if avatarId == activeAvatarId {
-		g.KillEntity(player, scene, entity.GetId(), dieType)
-	} else {
-		ntf := &proto.AvatarLifeStateChangeNotify{
-			AvatarGuid:      avatar.Guid,
-			LifeState:       uint32(avatar.LifeState),
-			DieType:         dieType,
-			MoveReliableSeq: entity.GetLastMoveReliableSeq(),
-		}
-		g.SendToWorldA(world, cmd.AvatarLifeStateChangeNotify, 0, ntf, 0)
-	}
-}
-
 // RevivePlayerAvatar 复活玩家活跃角色实体
 func (g *Game) RevivePlayerAvatar(player *model.Player, avatarId uint32) {
 	world := WORLD_MANAGER.GetWorldById(player.WorldId)
@@ -940,14 +902,19 @@ func (g *Game) KillEntity(player *model.Player, scene *Scene, entityId uint32, d
 		MoveReliableSeq: entity.GetLastMoveReliableSeq(),
 	}
 	g.SendToSceneA(scene, cmd.LifeStateChangeNotify, 0, ntf, 0)
-
-	_, ok := entity.(*AvatarEntity)
+	avatarEntity, ok := entity.(*AvatarEntity)
 	if ok {
+		dbAvatar := player.GetDbAvatar()
+		avatar := dbAvatar.GetAvatarById(avatarEntity.GetAvatarId())
+		if avatar == nil {
+			logger.Error("get avatar is nil, avatarId: %v", avatarEntity.GetAvatarId())
+			return
+		}
+		avatar.LifeState = constant.LIFE_STATE_DEAD
 		return
 	}
 
 	// 删除实体
-	g.EntityFightPropUpdateNotifyBroadcast(scene, entity)
 	g.RemoveSceneEntityNotifyBroadcast(scene, proto.VisionType_VISION_DIE, []uint32{entity.GetId()}, 0)
 	scene.DestroyEntity(entity.GetId())
 	group := scene.GetGroupById(entity.GetGroupId())

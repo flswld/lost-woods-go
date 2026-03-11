@@ -162,9 +162,10 @@ func (g *GMCmd) GMKillSelf(userId uint32) {
 		logger.Error("world is nil, worldId: %v, uid: %v", player.WorldId, player.PlayerId)
 		return
 	}
+	scene := world.GetSceneById(player.SceneId)
 	// 杀死当前活跃角色
-	activeAvatarId := world.GetPlayerActiveAvatarId(player)
-	GAME.KillPlayerAvatar(player, activeAvatarId, proto.PlayerDieType_PLAYER_DIE_GM)
+	activeAvatarEntity := world.GetPlayerActiveAvatarEntity(player)
+	GAME.KillEntity(player, scene, activeAvatarEntity.GetId(), proto.PlayerDieType_PLAYER_DIE_GM)
 }
 
 // GMKillMonster 杀死某个怪物

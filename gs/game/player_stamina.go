@@ -313,8 +313,9 @@ func (g *Game) HandleDrown(player *model.Player, stamina uint32) {
 		logger.Error("world is nil, worldId: %v, uid: %v", player.WorldId, player.PlayerId)
 		return
 	}
-	// 获取现行的角色
-	activeAvatarId := player.GetDbTeam().GetActiveAvatarId()
+	scene := world.GetSceneById(player.GetSceneId())
+	activeAvatarId := world.GetPlayerActiveAvatarId(player)
+	avatarEntityId := world.GetPlayerWorldAvatarEntityId(player, activeAvatarId)
 	activeAvatar := player.GetDbAvatar().GetAvatarById(activeAvatarId)
 	if activeAvatar == nil {
 		logger.Error("active avatar is nil, avatarId: %v", activeAvatarId)
@@ -323,7 +324,7 @@ func (g *Game) HandleDrown(player *model.Player, stamina uint32) {
 	if activeAvatar.LifeState != constant.LIFE_STATE_ALIVE {
 		return
 	}
-	g.KillPlayerAvatar(player, activeAvatarId, proto.PlayerDieType_PLAYER_DIE_DRAWN)
+	g.KillEntity(player, scene, avatarEntityId, proto.PlayerDieType_PLAYER_DIE_DRAWN)
 
 	logger.Debug("player drown, curStamina: %v, state: %v", stamina, player.StaminaInfo.State)
 }

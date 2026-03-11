@@ -199,7 +199,13 @@ func (g *Game) handleEvtBeingHit(player *model.Player, scene *Scene, hitInfo *pr
 			currHp = 0.0
 		}
 		fightProp[constant.FIGHT_PROP_CUR_HP] = currHp
-		g.EntityFightPropUpdateNotifyBroadcast(scene, defEntity)
+		ntf := &proto.EntityFightPropUpdateNotify{
+			EntityId: defEntity.GetId(),
+			FightPropMap: map[uint32]float32{
+				constant.FIGHT_PROP_CUR_HP: fightProp[constant.FIGHT_PROP_CUR_HP],
+			},
+		}
+		g.SendToSceneA(scene, cmd.EntityFightPropUpdateNotify, 0, ntf, 0)
 		if currHp == 0.0 {
 			g.KillEntity(player, scene, defEntity.GetId(), proto.PlayerDieType_PLAYER_DIE_GM)
 		}
