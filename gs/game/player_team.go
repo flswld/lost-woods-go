@@ -404,7 +404,7 @@ func (g *Game) PacketSceneTeamUpdateNotify(world *World, player *model.Player) *
 	}
 	empty := new(proto.AbilitySyncStateInfo)
 	for _, worldAvatar := range world.GetWorldAvatarList() {
-		if WORLD_MANAGER.IsAiWorld(world) && worldAvatar.uid != player.PlayerId {
+		if WORLD_MANAGER.IsAiWorld(world) && worldAvatar.GetUid() != player.PlayerId {
 			continue
 		}
 

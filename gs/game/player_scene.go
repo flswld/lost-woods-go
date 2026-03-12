@@ -840,12 +840,36 @@ func (g *Game) AddSceneEntityNotify(player *model.Player, visionType proto.Visio
 }
 
 // EntityFightPropUpdateNotifyBroadcast 场景实体战斗属性变更通知广播
-func (g *Game) EntityFightPropUpdateNotifyBroadcast(scene *Scene, entity IEntity) {
-	ntf := &proto.EntityFightPropUpdateNotify{
-		FightPropMap: entity.GetFightProp(),
-		EntityId:     entity.GetId(),
+func (g *Game) EntityFightPropUpdateNotifyBroadcast(scene *Scene, entity IEntity, fightPropMap map[uint32]float32) {
+	world := scene.GetWorld()
+	avatarEntity, ok := entity.(*AvatarEntity)
+	worldAvatar := world.GetWorldAvatarByEntityId(entity.GetId())
+	if ok && !worldAvatar.GetIsActive() {
+		userId := avatarEntity.GetUid()
+		avatarId := avatarEntity.GetAvatarId()
+		player := USER_MANAGER.GetOnlineUser(userId)
+		if player == nil {
+			logger.Error("player is nil, uid: %v", userId)
+			return
+		}
+		dbAvatar := player.GetDbAvatar()
+		avatar := dbAvatar.GetAvatarById(avatarId)
+		if avatar == nil {
+			logger.Error("get avatar is nil, avatarId: %v", avatarId)
+			return
+		}
+		avatarFightPropUpdateNotify := &proto.AvatarFightPropUpdateNotify{
+			AvatarGuid:   avatar.Guid,
+			FightPropMap: fightPropMap,
+		}
+		g.SendToSceneA(scene, cmd.AvatarFightPropUpdateNotify, 0, avatarFightPropUpdateNotify, 0)
+	} else {
+		entityFightPropUpdateNotify := &proto.EntityFightPropUpdateNotify{
+			EntityId:     entity.GetId(),
+			FightPropMap: fightPropMap,
+		}
+		g.SendToSceneA(scene, cmd.EntityFightPropUpdateNotify, 0, entityFightPropUpdateNotify, 0)
 	}
-	g.SendToSceneA(scene, cmd.EntityFightPropUpdateNotify, 0, ntf, 0)
 }
 
 // RevivePlayerAvatar 复活玩家活跃角色实体
@@ -1831,17 +1855,12 @@ func (g *Game) PacketPlayerEnterSceneNotifyCore(
 }
 
 func (g *Game) PacketFightPropMapToPbFightPropList(fightPropMap map[uint32]float32) []*proto.FightPropPair {
-	fightPropList := []*proto.FightPropPair{
-		{PropType: constant.FIGHT_PROP_BASE_HP, PropValue: fightPropMap[constant.FIGHT_PROP_BASE_HP]},
-		{PropType: constant.FIGHT_PROP_BASE_ATTACK, PropValue: fightPropMap[constant.FIGHT_PROP_BASE_ATTACK]},
-		{PropType: constant.FIGHT_PROP_BASE_DEFENSE, PropValue: fightPropMap[constant.FIGHT_PROP_BASE_DEFENSE]},
-		{PropType: constant.FIGHT_PROP_CRITICAL, PropValue: fightPropMap[constant.FIGHT_PROP_CRITICAL]},
-		{PropType: constant.FIGHT_PROP_CRITICAL_HURT, PropValue: fightPropMap[constant.FIGHT_PROP_CRITICAL_HURT]},
-		{PropType: constant.FIGHT_PROP_CHARGE_EFFICIENCY, PropValue: fightPropMap[constant.FIGHT_PROP_CHARGE_EFFICIENCY]},
-		{PropType: constant.FIGHT_PROP_CUR_HP, PropValue: fightPropMap[constant.FIGHT_PROP_CUR_HP]},
-		{PropType: constant.FIGHT_PROP_MAX_HP, PropValue: fightPropMap[constant.FIGHT_PROP_MAX_HP]},
-		{PropType: constant.FIGHT_PROP_CUR_ATTACK, PropValue: fightPropMap[constant.FIGHT_PROP_CUR_ATTACK]},
-		{PropType: constant.FIGHT_PROP_CUR_DEFENSE, PropValue: fightPropMap[constant.FIGHT_PROP_CUR_DEFENSE]},
+	fightPropList := make([]*proto.FightPropPair, 0)
+	for propType, propValue := range fightPropMap {
+		fightPropList = append(fightPropList, &proto.FightPropPair{
+			PropType:  propType,
+			PropValue: propValue,
+		})
 	}
 	return fightPropList
 }

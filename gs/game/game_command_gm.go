@@ -849,11 +849,11 @@ func (g *GMCmd) AiWorldAoiDebug() {
 		for objectId, object := range objectMap {
 			wa := object.(*WorldAvatar)
 			var pos *model.Vector = nil
-			entity := scene.GetEntity(wa.avatarEntityId)
+			entity := scene.GetEntity(wa.GetAvatarEntityId())
 			if entity != nil {
 				pos = entity.GetPos()
 			}
-			logger.Debug("uid: %v, wa.uid: %v, wa.avatarId: %v, wa.entityId: %v, pos: %+v", objectId, wa.uid, wa.avatarId, wa.avatarEntityId, pos)
+			logger.Debug("uid: %v, wa.uid: %v, wa.avatarId: %v, wa.entityId: %v, pos: %+v", objectId, wa.GetUid(), wa.GetAvatarId(), wa.GetAvatarEntityId(), pos)
 		}
 	}
 }

@@ -411,6 +411,7 @@ type WorldAvatar struct {
 	avatarId       uint32
 	avatarEntityId uint32
 	weaponEntityId uint32
+	isActive       bool
 	abilityMap     map[uint32]*proto.AbilityAppliedAbility
 	modifierMap    map[uint32]*proto.AbilityAppliedModifier
 }
@@ -431,8 +432,20 @@ func (w *WorldAvatar) GetWeaponEntityId() uint32 {
 	return w.weaponEntityId
 }
 
+func (w *WorldAvatar) GetIsActive() bool {
+	return w.isActive
+}
+
+func (w *WorldAvatar) SetAvatarEntityId(avatarEntityId uint32) {
+	w.avatarEntityId = avatarEntityId
+}
+
 func (w *WorldAvatar) SetWeaponEntityId(weaponEntityId uint32) {
 	w.weaponEntityId = weaponEntityId
+}
+
+func (w *WorldAvatar) SetIsActive(isActive bool) {
+	w.isActive = isActive
 }
 
 func (w *WorldAvatar) AddAbility(ability *proto.AbilityAppliedAbility) {
@@ -471,7 +484,7 @@ func (w *WorldAvatar) PacketModifierList() []*proto.AbilityAppliedModifier {
 func (w *World) GetWorldAvatarList() []*WorldAvatar {
 	worldAvatarList := make([]*WorldAvatar, 0)
 	for _, worldAvatar := range w.multiplayerTeam.worldTeam {
-		if worldAvatar.uid == 0 {
+		if worldAvatar.GetUid() == 0 {
 			continue
 		}
 		worldAvatarList = append(worldAvatarList, worldAvatar)
@@ -482,7 +495,7 @@ func (w *World) GetWorldAvatarList() []*WorldAvatar {
 // GetPlayerWorldAvatar 获取某玩家在世界队伍中的某角色
 func (w *World) GetPlayerWorldAvatar(player *model.Player, avatarId uint32) *WorldAvatar {
 	for _, worldAvatar := range w.GetWorldAvatarList() {
-		if worldAvatar.uid == player.PlayerId && worldAvatar.avatarId == avatarId {
+		if worldAvatar.GetUid() == player.PlayerId && worldAvatar.GetAvatarId() == avatarId {
 			return worldAvatar
 		}
 	}
@@ -493,7 +506,7 @@ func (w *World) GetPlayerWorldAvatar(player *model.Player, avatarId uint32) *Wor
 func (w *World) GetPlayerWorldAvatarList(player *model.Player) []*WorldAvatar {
 	worldAvatarList := make([]*WorldAvatar, 0)
 	for _, worldAvatar := range w.GetWorldAvatarList() {
-		if worldAvatar.uid == player.PlayerId {
+		if worldAvatar.GetUid() == player.PlayerId {
 			worldAvatarList = append(worldAvatarList, worldAvatar)
 		}
 	}
@@ -503,7 +516,7 @@ func (w *World) GetPlayerWorldAvatarList(player *model.Player) []*WorldAvatar {
 // GetWorldAvatarByEntityId 通过场景实体id获取世界队伍中的角色
 func (w *World) GetWorldAvatarByEntityId(avatarEntityId uint32) *WorldAvatar {
 	for _, worldAvatar := range w.GetWorldAvatarList() {
-		if worldAvatar.avatarEntityId == avatarEntityId {
+		if worldAvatar.GetAvatarEntityId() == avatarEntityId {
 			return worldAvatar
 		}
 	}
@@ -514,11 +527,11 @@ func (w *World) GetWorldAvatarByEntityId(avatarEntityId uint32) *WorldAvatar {
 func (w *World) UpdatePlayerWorldAvatar(player *model.Player) {
 	scene := w.GetSceneById(player.GetSceneId())
 	for _, worldAvatar := range w.GetPlayerWorldAvatarList(player) {
-		if worldAvatar.avatarEntityId != 0 {
+		if worldAvatar.GetAvatarEntityId() != 0 {
 			continue
 		}
-		worldAvatar.avatarEntityId = scene.CreateEntityAvatar(player, worldAvatar.avatarId)
-		worldAvatar.weaponEntityId = scene.CreateEntityWeapon(player.GetPos(), player.GetRot())
+		worldAvatar.SetAvatarEntityId(scene.CreateEntityAvatar(player, worldAvatar.GetAvatarId()))
+		worldAvatar.SetWeaponEntityId(scene.CreateEntityWeapon(player.GetPos(), player.GetRot()))
 	}
 }
 
@@ -538,7 +551,7 @@ func (w *World) GetPlayerWorldAvatarEntityId(player *model.Player, avatarId uint
 	if worldAvatar == nil {
 		return 0
 	}
-	return worldAvatar.avatarEntityId
+	return worldAvatar.GetAvatarEntityId()
 }
 
 // GetPlayerWorldAvatarWeaponEntityId 获取某玩家在世界队伍中的某角色的武器的实体id
@@ -547,7 +560,7 @@ func (w *World) GetPlayerWorldAvatarWeaponEntityId(player *model.Player, avatarI
 	if worldAvatar == nil {
 		return 0
 	}
-	return worldAvatar.weaponEntityId
+	return worldAvatar.GetWeaponEntityId()
 }
 
 // GetPlayerActiveAvatarId 获取玩家当前活跃角色id
@@ -558,24 +571,21 @@ func (w *World) GetPlayerActiveAvatarId(player *model.Player) uint32 {
 // SetPlayerActiveAvatarId 设置玩家当前活跃角色id
 func (w *World) SetPlayerActiveAvatarId(player *model.Player, avatarId uint32) {
 	localTeam := w.GetPlayerLocalTeam(player)
-	exist := false
 	for _, worldAvatar := range localTeam {
-		if worldAvatar.avatarId == avatarId {
-			exist = true
-			break
+		if worldAvatar.GetAvatarId() == avatarId {
+			w.multiplayerTeam.localActiveAvatarMap[player.PlayerId] = avatarId
+			worldAvatar.SetIsActive(true)
+		} else {
+			worldAvatar.SetIsActive(false)
 		}
 	}
-	if !exist {
-		return
-	}
-	w.multiplayerTeam.localActiveAvatarMap[player.PlayerId] = avatarId
 }
 
 // GetPlayerAvatarIndexByAvatarId 获取玩家某角色的索引
 func (w *World) GetPlayerAvatarIndexByAvatarId(player *model.Player, avatarId uint32) int {
 	localTeam := w.GetPlayerLocalTeam(player)
 	for index, worldAvatar := range localTeam {
-		if worldAvatar.avatarId == avatarId {
+		if worldAvatar.GetAvatarId() == avatarId {
 			return index
 		}
 	}
@@ -631,7 +641,7 @@ func (w *World) SetPlayerLocalTeam(player *model.Player, avatarIdList []uint32) 
 	for _, avatarId := range avatarIdList {
 		exist := false
 		for _, worldAvatar := range oldLocalTeam {
-			if worldAvatar.avatarId == avatarId {
+			if worldAvatar.GetAvatarId() == avatarId {
 				exist = true
 			}
 		}
@@ -644,7 +654,7 @@ func (w *World) SetPlayerLocalTeam(player *model.Player, avatarIdList []uint32) 
 	newLocalTeam := make([]*WorldAvatar, len(avatarIdList))
 	for _, avatarId := range sameAvatarIdList {
 		for _, worldAvatar := range oldLocalTeam {
-			if worldAvatar.avatarId == avatarId {
+			if worldAvatar.GetAvatarId() == avatarId {
 				index := 0
 				for i, v := range avatarIdList {
 					if avatarId == v {
@@ -669,19 +679,20 @@ func (w *World) SetPlayerLocalTeam(player *model.Player, avatarIdList []uint32) 
 			weaponEntityId: 0,
 			abilityMap:     make(map[uint32]*proto.AbilityAppliedAbility),
 			modifierMap:    make(map[uint32]*proto.AbilityAppliedModifier),
+			isActive:       false,
 		}
 	}
 	scene := w.GetSceneById(player.GetSceneId())
 	for _, worldAvatar := range oldLocalTeam {
 		exist := false
 		for _, avatarId := range avatarIdList {
-			if worldAvatar.avatarId == avatarId {
+			if worldAvatar.GetAvatarId() == avatarId {
 				exist = true
 			}
 		}
 		if !exist {
-			scene.DestroyEntity(worldAvatar.avatarEntityId)
-			scene.DestroyEntity(worldAvatar.weaponEntityId)
+			scene.DestroyEntity(worldAvatar.GetAvatarEntityId())
+			scene.DestroyEntity(worldAvatar.GetWeaponEntityId())
 		}
 	}
 	w.multiplayerTeam.localTeamMap[player.PlayerId] = newLocalTeam
@@ -699,7 +710,7 @@ func (w *World) AddMultiplayerTeam(player *model.Player) {
 func (w *World) RemoveMultiplayerTeam(player *model.Player) {
 	worldTeam := make([]*WorldAvatar, 0)
 	for _, worldAvatar := range w.multiplayerTeam.worldTeam {
-		if worldAvatar.uid == player.PlayerId {
+		if worldAvatar.GetUid() == player.PlayerId {
 			continue
 		}
 		worldTeam = append(worldTeam, worldAvatar)
@@ -727,6 +738,7 @@ func (w *World) UpdateMultiplayerTeam() {
 				weaponEntityId: 0,
 				abilityMap:     nil,
 				modifierMap:    nil,
+				isActive:       false,
 			}
 			if index < len(p1LocalTeam) {
 				worldAvatar = p1LocalTeam[index]
@@ -786,18 +798,19 @@ func (w *World) SelectPlayerWorldAvatar(peerId uint32, active bool) *WorldAvatar
 		weaponEntityId: 0,
 		abilityMap:     nil,
 		modifierMap:    nil,
+		isActive:       false,
 	}
 	player := w.GetPlayerByPeerId(peerId)
 	localTeam := w.GetPlayerLocalTeam(player)
 	activeAvatarId := w.GetPlayerActiveAvatarId(player)
 	for _, wa := range localTeam {
 		if active {
-			if wa.avatarId == activeAvatarId {
+			if wa.GetAvatarId() == activeAvatarId {
 				worldAvatar = wa
 				break
 			}
 		} else {
-			if wa.avatarId != activeAvatarId {
+			if wa.GetAvatarId() != activeAvatarId {
 				worldAvatar = wa
 				break
 			}

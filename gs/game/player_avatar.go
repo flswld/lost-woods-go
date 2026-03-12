@@ -640,20 +640,7 @@ func (g *Game) UpdatePlayerAvatarFightProp(userId uint32, avatarId uint32) {
 		return
 	}
 	entity.SetFightProp(avatar.FightPropMap)
-	avatarEntity := world.GetPlayerActiveAvatarEntity(player)
-	if entity.GetId() == avatarEntity.GetId() {
-		entityFightPropUpdateNotify := &proto.EntityFightPropUpdateNotify{
-			EntityId:     entity.GetId(),
-			FightPropMap: updateFightPropMap,
-		}
-		g.SendToSceneA(scene, cmd.EntityFightPropUpdateNotify, 0, entityFightPropUpdateNotify, 0)
-	} else {
-		avatarFightPropUpdateNotify := &proto.AvatarFightPropUpdateNotify{
-			AvatarGuid:   avatar.Guid,
-			FightPropMap: updateFightPropMap,
-		}
-		g.SendToSceneA(scene, cmd.AvatarFightPropUpdateNotify, 0, avatarFightPropUpdateNotify, 0)
-	}
+	g.EntityFightPropUpdateNotifyBroadcast(scene, entity, updateFightPropMap)
 }
 
 // ChangePlayerAvatarSkillDepot 改变角色技能库
@@ -738,6 +725,7 @@ func (g *Game) AddPlayerAvatarHp(userId uint32, avatarId uint32, value float32, 
 	}
 	world := WORLD_MANAGER.GetWorldById(player.WorldId)
 	if world == nil {
+		logger.Error("get world is nil, worldId: %v, uid: %v", player.WorldId, player.PlayerId)
 		return
 	}
 	scene := world.GetSceneById(player.GetSceneId())
@@ -764,24 +752,9 @@ func (g *Game) AddPlayerAvatarHp(userId uint32, avatarId uint32, value float32, 
 		fightProp[constant.FIGHT_PROP_CUR_HP] = currHp
 	}
 
-	activeAvatarEntity := world.GetPlayerActiveAvatarEntity(player)
-	if entity.GetId() == activeAvatarEntity.GetId() {
-		entityFightPropUpdateNotify := &proto.EntityFightPropUpdateNotify{
-			EntityId: entity.GetId(),
-			FightPropMap: map[uint32]float32{
-				constant.FIGHT_PROP_CUR_HP: fightProp[constant.FIGHT_PROP_CUR_HP],
-			},
-		}
-		g.SendToSceneA(scene, cmd.EntityFightPropUpdateNotify, 0, entityFightPropUpdateNotify, 0)
-	} else {
-		avatarFightPropUpdateNotify := &proto.AvatarFightPropUpdateNotify{
-			AvatarGuid: avatar.Guid,
-			FightPropMap: map[uint32]float32{
-				constant.FIGHT_PROP_CUR_HP: fightProp[constant.FIGHT_PROP_CUR_HP],
-			},
-		}
-		g.SendToSceneA(scene, cmd.AvatarFightPropUpdateNotify, 0, avatarFightPropUpdateNotify, 0)
-	}
+	g.EntityFightPropUpdateNotifyBroadcast(scene, entity, map[uint32]float32{
+		constant.FIGHT_PROP_CUR_HP: fightProp[constant.FIGHT_PROP_CUR_HP],
+	})
 
 	g.SendMsg(cmd.EntityFightPropChangeReasonNotify, player.PlayerId, player.ClientSeq, &proto.EntityFightPropChangeReasonNotify{
 		PropDelta:      deltaHp,
@@ -812,6 +785,7 @@ func (g *Game) SubPlayerAvatarHp(userId uint32, avatarId uint32, value float32, 
 	}
 	world := WORLD_MANAGER.GetWorldById(player.WorldId)
 	if world == nil {
+		logger.Error("get world is nil, worldId: %v, uid: %v", player.WorldId, player.PlayerId)
 		return
 	}
 	scene := world.GetSceneById(player.GetSceneId())
@@ -836,24 +810,9 @@ func (g *Game) SubPlayerAvatarHp(userId uint32, avatarId uint32, value float32, 
 		fightProp[constant.FIGHT_PROP_CUR_HP] = currHp
 	}
 
-	activeAvatarEntity := world.GetPlayerActiveAvatarEntity(player)
-	if entity.GetId() == activeAvatarEntity.GetId() {
-		entityFightPropUpdateNotify := &proto.EntityFightPropUpdateNotify{
-			EntityId: entity.GetId(),
-			FightPropMap: map[uint32]float32{
-				constant.FIGHT_PROP_CUR_HP: fightProp[constant.FIGHT_PROP_CUR_HP],
-			},
-		}
-		g.SendToSceneA(scene, cmd.EntityFightPropUpdateNotify, 0, entityFightPropUpdateNotify, 0)
-	} else {
-		avatarFightPropUpdateNotify := &proto.AvatarFightPropUpdateNotify{
-			AvatarGuid: avatar.Guid,
-			FightPropMap: map[uint32]float32{
-				constant.FIGHT_PROP_CUR_HP: fightProp[constant.FIGHT_PROP_CUR_HP],
-			},
-		}
-		g.SendToSceneA(scene, cmd.AvatarFightPropUpdateNotify, 0, avatarFightPropUpdateNotify, 0)
-	}
+	g.EntityFightPropUpdateNotifyBroadcast(scene, entity, map[uint32]float32{
+		constant.FIGHT_PROP_CUR_HP: fightProp[constant.FIGHT_PROP_CUR_HP],
+	})
 
 	g.SendMsg(cmd.EntityFightPropChangeReasonNotify, player.PlayerId, player.ClientSeq, &proto.EntityFightPropChangeReasonNotify{
 		PropDelta:      deltaHp,
@@ -861,6 +820,7 @@ func (g *Game) SubPlayerAvatarHp(userId uint32, avatarId uint32, value float32, 
 		EntityId:       entity.GetId(),
 		PropType:       constant.FIGHT_PROP_CUR_HP,
 	})
+
 	if currHp == 0.0 {
 		var dieType proto.PlayerDieType
 		switch reason {
@@ -914,7 +874,22 @@ func (g *Game) AddPlayerAvatarEnergy(userId uint32, avatarId uint32, value float
 			avatar.FightPropMap[uint32(fightPropEnergy.CurEnergy)] = float32(avatarSkillDataConfig.CostElemVal)
 		}
 	}
-	g.UpdatePlayerAvatarFightProp(player.PlayerId, avatarId)
+
+	world := WORLD_MANAGER.GetWorldById(player.WorldId)
+	if world == nil {
+		logger.Error("get world is nil, worldId: %v, uid: %v", player.WorldId, player.PlayerId)
+		return
+	}
+	scene := world.GetSceneById(player.SceneId)
+	entityId := world.GetPlayerWorldAvatarEntityId(player, avatarId)
+	entity := scene.GetEntity(entityId)
+	if entity == nil {
+		logger.Error("get entity is nil, entityId: %v", entityId)
+		return
+	}
+	g.EntityFightPropUpdateNotifyBroadcast(scene, entity, map[uint32]float32{
+		uint32(fightPropEnergy.CurEnergy): avatar.FightPropMap[uint32(fightPropEnergy.CurEnergy)],
+	})
 }
 
 // CostPlayerAvatarEnergy 角色消耗元素能量
@@ -947,7 +922,22 @@ func (g *Game) CostPlayerAvatarEnergy(userId uint32, avatarId uint32, value floa
 			avatar.FightPropMap[uint32(fightPropEnergy.CurEnergy)] = 0.0
 		}
 	}
-	g.UpdatePlayerAvatarFightProp(player.PlayerId, avatarId)
+
+	world := WORLD_MANAGER.GetWorldById(player.WorldId)
+	if world == nil {
+		logger.Error("get world is nil, worldId: %v, uid: %v", player.WorldId, player.PlayerId)
+		return
+	}
+	scene := world.GetSceneById(player.SceneId)
+	entityId := world.GetPlayerWorldAvatarEntityId(player, avatarId)
+	entity := scene.GetEntity(entityId)
+	if entity == nil {
+		logger.Error("get entity is nil, entityId: %v", entityId)
+		return
+	}
+	g.EntityFightPropUpdateNotifyBroadcast(scene, entity, map[uint32]float32{
+		uint32(fightPropEnergy.CurEnergy): avatar.FightPropMap[uint32(fightPropEnergy.CurEnergy)],
+	})
 }
 
 /************************************************** 打包封装 **************************************************/

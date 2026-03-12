@@ -80,8 +80,8 @@ func (s *Scene) GetSceneTime() int64 {
 func (s *Scene) AddPlayer(player *model.Player) {
 	s.playerMap[player.PlayerId] = player
 	for _, worldAvatar := range s.world.GetPlayerWorldAvatarList(player) {
-		worldAvatar.avatarEntityId = s.CreateEntityAvatar(player, worldAvatar.avatarId)
-		worldAvatar.weaponEntityId = s.CreateEntityWeapon(player.GetPos(), player.GetRot())
+		worldAvatar.SetAvatarEntityId(s.CreateEntityAvatar(player, worldAvatar.GetAvatarId()))
+		worldAvatar.SetWeaponEntityId(s.CreateEntityWeapon(player.GetPos(), player.GetRot()))
 	}
 }
 
@@ -89,8 +89,8 @@ func (s *Scene) RemovePlayer(player *model.Player) {
 	delete(s.playerMap, player.PlayerId)
 	worldAvatarList := s.world.GetPlayerWorldAvatarList(player)
 	for _, worldAvatar := range worldAvatarList {
-		s.DestroyEntity(worldAvatar.avatarEntityId)
-		s.DestroyEntity(worldAvatar.weaponEntityId)
+		s.DestroyEntity(worldAvatar.GetAvatarEntityId())
+		s.DestroyEntity(worldAvatar.GetWeaponEntityId())
 	}
 }
 
@@ -764,7 +764,9 @@ func (a *Ability) GetDynamicFloat(abilityData *gdconf.AbilityData, dynamicFloat 
 
 func (e *Entity) AbilityAction(ability *Ability, action *gdconf.ActionData, entity IEntity) {
 	logger.Debug("[AbilityAction] type: %v, entityId: %v", action.Type, entity.GetId())
-	owner := entity.GetScene().GetWorld().GetOwner()
+	scene := entity.GetScene()
+	world := scene.GetWorld()
+	owner := world.GetOwner()
 	switch action.Type {
 	case "ExecuteGadgetLua":
 		iGadgetEntity, ok := entity.(IGadgetEntity)
@@ -788,7 +790,7 @@ func (e *Entity) AbilityAction(ability *Ability, action *gdconf.ActionData, enti
 				action.Param1, action.Param2, action.Param3)
 		}
 	case "KillSelf":
-		GAME.KillEntity(owner, entity.GetScene(), entity.GetId(), proto.PlayerDieType_PLAYER_DIE_NONE)
+		GAME.KillEntity(owner, scene, entity.GetId(), proto.PlayerDieType_PLAYER_DIE_NONE)
 	case "AvatarSkillStart":
 		abilityDataConfig := gdconf.GetAbilityDataByName(ability.abilityName)
 		if abilityDataConfig == nil {
@@ -835,6 +837,16 @@ func (e *Entity) AbilityAction(ability *Ability, action *gdconf.ActionData, enti
 			for i := 0; i < int(count); i++ {
 				GAME.CreateDropGadget(owner, entity.GetPos(), uint32(itemDataConfig.GadgetId), uint32(action.ConfigID), 1)
 			}
+		}
+	case "HealHP":
+		abilityDataConfig := gdconf.GetAbilityDataByName(ability.abilityName)
+		if abilityDataConfig == nil {
+			logger.Error("get ability data config is nil, abilityName: %v", ability.abilityName)
+			return
+		}
+		amount := ability.GetDynamicFloat(abilityDataConfig, action.Amount)
+		for _, worldAvatar := range world.GetPlayerWorldAvatarList(owner) {
+			GAME.AddPlayerAvatarHp(owner.PlayerId, worldAvatar.GetAvatarId(), amount, false, proto.ChangHpReason_CHANGE_HP_ADD_ABILITY)
 		}
 	default:
 		logger.Error("not support ability action type: %v, abilityName: %v, entityId: %v", action.Type, ability.abilityName, entity.GetId())

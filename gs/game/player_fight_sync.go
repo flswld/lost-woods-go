@@ -199,13 +199,9 @@ func (g *Game) handleEvtBeingHit(player *model.Player, scene *Scene, hitInfo *pr
 			currHp = 0.0
 		}
 		fightProp[constant.FIGHT_PROP_CUR_HP] = currHp
-		ntf := &proto.EntityFightPropUpdateNotify{
-			EntityId: defEntity.GetId(),
-			FightPropMap: map[uint32]float32{
-				constant.FIGHT_PROP_CUR_HP: fightProp[constant.FIGHT_PROP_CUR_HP],
-			},
-		}
-		g.SendToSceneA(scene, cmd.EntityFightPropUpdateNotify, 0, ntf, 0)
+		g.EntityFightPropUpdateNotifyBroadcast(scene, defEntity, map[uint32]float32{
+			constant.FIGHT_PROP_CUR_HP: fightProp[constant.FIGHT_PROP_CUR_HP],
+		})
 		if currHp == 0.0 {
 			g.KillEntity(player, scene, defEntity.GetId(), proto.PlayerDieType_PLAYER_DIE_GM)
 		}
@@ -704,7 +700,7 @@ func (g *Game) handleAbilityInvoke(player *model.Player, entry *proto.AbilityInv
 		}
 		actionDataConfig := abilityDataConfig.GetActionDataByLocalId(entry.Head.LocalId)
 		if actionDataConfig == nil {
-			logger.Error("get action data config is nil, localId: %v", entry.Head.LocalId)
+			logger.Error("get action data config is nil, abilityName: %v, localId: %v", ability.abilityName, entry.Head.LocalId)
 			return
 		}
 		entity.AbilityAction(ability, actionDataConfig, entity)
@@ -721,7 +717,7 @@ func (g *Game) handleAbilityInvoke(player *model.Player, entry *proto.AbilityInv
 		}
 		mixinDataConfig := abilityDataConfig.GetMixinDataByLocalId(entry.Head.LocalId)
 		if mixinDataConfig == nil {
-			logger.Error("get mixin data config is nil, localId: %v", entry.Head.LocalId)
+			logger.Error("get mixin data config is nil, abilityName: %v, localId: %v", ability.abilityName, entry.Head.LocalId)
 			return
 		}
 		entity.AbilityMixin(ability, mixinDataConfig, entity)
