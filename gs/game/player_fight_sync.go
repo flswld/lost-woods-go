@@ -181,45 +181,24 @@ func (g *Game) handleEvtBeingHit(player *model.Player, scene *Scene, hitInfo *pr
 	if defEntity == nil {
 		return
 	}
+	var changHpReason proto.ChangHpReason
+	atkEntity := scene.GetEntity(attackResult.AttackerId)
+	if atkEntity != nil {
+		switch atkEntity.GetEntityType() {
+		case constant.ENTITY_TYPE_AVATAR:
+			changHpReason = proto.ChangHpReason_CHANGE_HP_SUB_AVATAR
+		case constant.ENTITY_TYPE_MONSTER:
+			changHpReason = proto.ChangHpReason_CHANGE_HP_SUB_MONSTER
+		case constant.ENTITY_TYPE_GADGET:
+			changHpReason = proto.ChangHpReason_CHANGE_HP_SUB_GEAR
+		}
+	}
 	switch defEntity.(type) {
 	case *AvatarEntity:
 		avatarEntity := defEntity.(*AvatarEntity)
-		g.SubPlayerAvatarHp(player.PlayerId, avatarEntity.GetAvatarId(), attackResult.Damage, false, proto.ChangHpReason_CHANGE_HP_SUB_MONSTER)
+		g.SubPlayerAvatarHp(player.PlayerId, avatarEntity.GetAvatarId(), attackResult.Damage, 0.0, changHpReason)
 	case *MonsterEntity:
-		monsterEntity := defEntity.(*MonsterEntity)
-		if scene.GetMonsterWudi() {
-			return
-		}
-		fightProp := defEntity.GetFightProp()
-		currHp := fightProp[constant.FIGHT_PROP_CUR_HP]
-		maxHp := fightProp[constant.FIGHT_PROP_MAX_HP]
-		lastHp := currHp
-		currHp -= attackResult.Damage
-		if currHp < 0.0 {
-			currHp = 0.0
-		}
-		fightProp[constant.FIGHT_PROP_CUR_HP] = currHp
-		g.EntityFightPropUpdateNotifyBroadcast(scene, defEntity, map[uint32]float32{
-			constant.FIGHT_PROP_CUR_HP: fightProp[constant.FIGHT_PROP_CUR_HP],
-		})
-		if currHp == 0.0 {
-			g.KillEntity(player, scene, defEntity.GetId(), proto.PlayerDieType_PLAYER_DIE_GM)
-		}
-		if defEntity.GetGroupId() == 0 {
-			return
-		}
-		monsterDataConfig := gdconf.GetMonsterDataById(int32(monsterEntity.GetMonsterId()))
-		if monsterDataConfig == nil {
-			logger.Error("get monster data config is nil, monsterId: %v", monsterEntity.GetMonsterId())
-			return
-		}
-		lastHpPercent := lastHp / maxHp * 100.0
-		currHpPercent := currHp / maxHp * 100.0
-		for _, hpDrop := range monsterDataConfig.HpDropList {
-			if hpDrop.HpPercent >= int32(currHpPercent) && hpDrop.HpPercent <= int32(lastHpPercent) {
-				g.monsterDrop(player, MonsterDropTypeHp, hpDrop.Id, defEntity)
-			}
-		}
+		g.SubEntityHp(player, scene, defEntity.GetId(), attackResult.Damage, 0.0, changHpReason)
 	case IGadgetEntity:
 		iGadgetEntity := defEntity.(IGadgetEntity)
 		gadgetDataConfig := gdconf.GetGadgetDataById(int32(iGadgetEntity.GetGadgetId()))
@@ -338,7 +317,7 @@ func (g *Game) handleEntityMove(player *model.Player, world *World, scene *Scene
 					}
 					fightProp := entity.GetFightProp()
 					maxHp := fightProp[constant.FIGHT_PROP_MAX_HP]
-					g.SubPlayerAvatarHp(player.PlayerId, avatarEntity.GetAvatarId(), maxHp*rate, false, proto.ChangHpReason_CHANGE_HP_SUB_FALL)
+					g.SubPlayerAvatarHp(player.PlayerId, avatarEntity.GetAvatarId(), maxHp*rate, 0.0, proto.ChangHpReason_CHANGE_HP_SUB_FALL)
 				}
 			}
 			player.Speed = &model.Vector{X: float64(motionInfo.Speed.X), Y: float64(motionInfo.Speed.Y), Z: float64(motionInfo.Speed.Z)}

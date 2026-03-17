@@ -108,7 +108,7 @@ func (g *GMCmd) GMAddAvatar(userId, avatarId uint32, level, promote uint8) {
 	// 修正角色属性
 	avatar.Level = level
 	avatar.Promote = promote
-	GAME.AddPlayerAvatarHp(player.PlayerId, avatarId, 0.0, true, proto.ChangHpReason_CHANGE_HP_ADD_GM)
+	GAME.AddPlayerAvatarHp(player.PlayerId, avatarId, 0.0, 1.0, proto.ChangHpReason_CHANGE_HP_ADD_GM)
 	// 角色更新面板
 	GAME.UpdatePlayerAvatarFightProp(player.PlayerId, avatar.AvatarId)
 	// 角色属性表更新通知
@@ -162,10 +162,9 @@ func (g *GMCmd) GMKillSelf(userId uint32) {
 		logger.Error("world is nil, worldId: %v, uid: %v", player.WorldId, player.PlayerId)
 		return
 	}
-	scene := world.GetSceneById(player.SceneId)
 	// 杀死当前活跃角色
-	activeAvatarEntity := world.GetPlayerActiveAvatarEntity(player)
-	GAME.KillEntity(player, scene, activeAvatarEntity.GetId(), proto.PlayerDieType_PLAYER_DIE_GM)
+	activeAvatarId := world.GetPlayerActiveAvatarId(player)
+	GAME.SubPlayerAvatarHp(player.PlayerId, activeAvatarId, 0.0, 1.0, proto.ChangHpReason_CHANGE_HP_SUB_GM)
 }
 
 // GMKillMonster 杀死某个怪物
@@ -197,7 +196,7 @@ func (g *GMCmd) GMKillMonster(userId uint32, entityId uint32) {
 		return
 	}
 	// 杀死怪物
-	GAME.KillEntity(player, scene, entity.GetId(), proto.PlayerDieType_PLAYER_DIE_GM)
+	GAME.SubEntityHp(player, scene, entity.GetId(), 0.0, 1.0, proto.ChangHpReason_CHANGE_HP_SUB_GM)
 }
 
 // GMKillAllMonster 杀死所有怪物
@@ -225,7 +224,7 @@ func (g *GMCmd) GMKillAllMonster(userId uint32) {
 			continue
 		}
 		// 杀死怪物
-		GAME.KillEntity(player, scene, entity.GetId(), proto.PlayerDieType_PLAYER_DIE_GM)
+		GAME.SubEntityHp(player, scene, entity.GetId(), 0.0, 1.0, proto.ChangHpReason_CHANGE_HP_SUB_GM)
 	}
 }
 

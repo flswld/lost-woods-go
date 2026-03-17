@@ -324,7 +324,7 @@ func (g *Game) HandleDrown(player *model.Player, stamina uint32) {
 	if activeAvatar.LifeState != constant.LIFE_STATE_ALIVE {
 		return
 	}
-	g.KillEntity(player, scene, avatarEntityId, proto.PlayerDieType_PLAYER_DIE_DRAWN)
+	g.SubEntityHp(player, scene, avatarEntityId, 0.0, 1.0, proto.ChangHpReason_CHANGE_HP_SUB_DRAWN)
 
 	logger.Debug("player drown, curStamina: %v, state: %v", stamina, player.StaminaInfo.State)
 }

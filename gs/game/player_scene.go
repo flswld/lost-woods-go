@@ -318,9 +318,6 @@ func (g *Game) SceneInitFinishReq(player *model.Player, payloadMsg pb.Message) {
 				logger.Error("get avatar is nil, avatarId: %v", worldAvatar.GetAvatarId())
 				continue
 			}
-			if avatar.LifeState != constant.LIFE_STATE_DEAD {
-				continue
-			}
 			g.RevivePlayerAvatar(player, worldAvatar.GetAvatarId())
 		}
 	}
@@ -501,7 +498,7 @@ func (g *Game) SceneEntityDrownReq(player *model.Player, payloadMsg pb.Message) 
 		return
 	}
 	scene := world.GetSceneById(player.GetSceneId())
-	g.KillEntity(player, scene, req.EntityId, proto.PlayerDieType_PLAYER_DIE_DRAWN)
+	GAME.SubEntityHp(player, scene, req.EntityId, 0.0, 1.0, proto.ChangHpReason_CHANGE_HP_SUB_DRAWN)
 
 	rsp := &proto.SceneEntityDrownRsp{
 		EntityId: req.EntityId,
@@ -839,8 +836,98 @@ func (g *Game) AddSceneEntityNotify(player *model.Player, visionType proto.Visio
 	}
 }
 
+func (g *Game) AddEntityHp(player *model.Player, scene *Scene, entityId uint32, value float32, percent float32, reason proto.ChangHpReason) {
+	if value == 0.0 && percent == 0.0 {
+		return
+	}
+	entity := scene.GetEntity(entityId)
+	if entity == nil {
+		return
+	}
+	avatarEntity, ok := entity.(*AvatarEntity)
+	if ok {
+		g.AddPlayerAvatarHp(avatarEntity.GetUid(), avatarEntity.GetAvatarId(), value, percent, reason)
+		return
+	}
+	fightProp := entity.GetFightProp()
+	currHp := fightProp[constant.FIGHT_PROP_CUR_HP]
+	maxHp := fightProp[constant.FIGHT_PROP_MAX_HP]
+	if percent != 0.0 {
+		currHp += maxHp * percent
+	} else {
+		currHp += value
+	}
+	if currHp > maxHp {
+		currHp = maxHp
+	}
+	fightProp[constant.FIGHT_PROP_CUR_HP] = currHp
+	g.EntityFightPropUpdateNotifyBroadcast(scene, entity, map[uint32]float32{
+		constant.FIGHT_PROP_CUR_HP: fightProp[constant.FIGHT_PROP_CUR_HP],
+	})
+}
+
+func (g *Game) SubEntityHp(player *model.Player, scene *Scene, entityId uint32, value float32, percent float32, reason proto.ChangHpReason) {
+	if value == 0.0 && percent == 0.0 {
+		return
+	}
+	entity := scene.GetEntity(entityId)
+	if entity == nil {
+		return
+	}
+	avatarEntity, ok := entity.(*AvatarEntity)
+	if ok {
+		g.SubPlayerAvatarHp(avatarEntity.GetUid(), avatarEntity.GetAvatarId(), value, percent, reason)
+		return
+	}
+	if entity.GetEntityType() == constant.ENTITY_TYPE_MONSTER && scene.GetMonsterWudi() {
+		return
+	}
+	fightProp := entity.GetFightProp()
+	currHp := fightProp[constant.FIGHT_PROP_CUR_HP]
+	maxHp := fightProp[constant.FIGHT_PROP_MAX_HP]
+	lastHp := currHp
+	if percent != 0.0 {
+		currHp -= maxHp * percent
+	} else {
+		currHp -= value
+	}
+	if currHp < 0.0 {
+		currHp = 0.0
+	}
+	fightProp[constant.FIGHT_PROP_CUR_HP] = currHp
+	g.EntityFightPropUpdateNotifyBroadcast(scene, entity, map[uint32]float32{
+		constant.FIGHT_PROP_CUR_HP: fightProp[constant.FIGHT_PROP_CUR_HP],
+	})
+	if currHp == 0.0 {
+		dieType := g.GetPlayerDieTypeByChangHpReason(reason)
+		g.KillEntity(player, scene, entity.GetId(), dieType)
+	}
+	if entity.GetGroupId() == 0 {
+		return
+	}
+	switch entity.(type) {
+	case *MonsterEntity:
+		monsterEntity := entity.(*MonsterEntity)
+		monsterDataConfig := gdconf.GetMonsterDataById(int32(monsterEntity.GetMonsterId()))
+		if monsterDataConfig == nil {
+			logger.Error("get monster data config is nil, monsterId: %v", monsterEntity.GetMonsterId())
+			return
+		}
+		lastHpPercent := lastHp / maxHp * 100.0
+		currHpPercent := currHp / maxHp * 100.0
+		for _, hpDrop := range monsterDataConfig.HpDropList {
+			if hpDrop.HpPercent >= int32(currHpPercent) && hpDrop.HpPercent <= int32(lastHpPercent) {
+				g.monsterDrop(player, MonsterDropTypeHp, hpDrop.Id, entity)
+			}
+		}
+	}
+}
+
 // EntityFightPropUpdateNotifyBroadcast 场景实体战斗属性变更通知广播
 func (g *Game) EntityFightPropUpdateNotifyBroadcast(scene *Scene, entity IEntity, fightPropMap map[uint32]float32) {
+	if len(fightPropMap) == 0 {
+		return
+	}
 	world := scene.GetWorld()
 	avatarEntity, ok := entity.(*AvatarEntity)
 	worldAvatar := world.GetWorldAvatarByEntityId(entity.GetId())
@@ -872,53 +959,15 @@ func (g *Game) EntityFightPropUpdateNotifyBroadcast(scene *Scene, entity IEntity
 	}
 }
 
-// RevivePlayerAvatar 复活玩家活跃角色实体
-func (g *Game) RevivePlayerAvatar(player *model.Player, avatarId uint32) {
-	world := WORLD_MANAGER.GetWorldById(player.WorldId)
-	if world == nil {
-		return
-	}
-	scene := world.GetSceneById(player.GetSceneId())
-
-	dbAvatar := player.GetDbAvatar()
-	avatar := dbAvatar.GetAvatarById(avatarId)
-	if avatar == nil {
-		logger.Error("get avatar is nil, avatarId: %v", avatarId)
-		return
-	}
-
-	avatar.LifeState = constant.LIFE_STATE_ALIVE
-	avatar.FightPropMap[constant.FIGHT_PROP_CUR_HP] = 100.0
-
-	g.UpdatePlayerAvatarFightProp(player.PlayerId, avatarId)
-
-	ntf := &proto.AvatarLifeStateChangeNotify{
-		AvatarGuid:      avatar.Guid,
-		LifeState:       uint32(avatar.LifeState),
-		DieType:         proto.PlayerDieType_PLAYER_DIE_NONE,
-		MoveReliableSeq: 0,
-	}
-	g.SendToWorldA(world, cmd.AvatarLifeStateChangeNotify, 0, ntf, 0)
-
-	worldAvatar := world.GetPlayerWorldAvatar(player, avatarId)
-	if worldAvatar == nil {
-		return
-	}
-	entity := scene.GetEntity(worldAvatar.GetAvatarEntityId())
-	entity.SetLifeState(constant.LIFE_STATE_ALIVE)
-	entity.GetFightProp()[constant.FIGHT_PROP_CUR_HP] = 100.0
-}
-
 // KillEntity 杀死实体
 func (g *Game) KillEntity(player *model.Player, scene *Scene, entityId uint32, dieType proto.PlayerDieType) {
 	entity := scene.GetEntity(entityId)
 	if entity == nil {
 		return
 	}
-	// 设置血量
+	// 设置死亡状态
 	entity.SetLastDieType(int32(dieType))
 	entity.SetLifeState(constant.LIFE_STATE_DEAD)
-	entity.GetFightProp()[constant.FIGHT_PROP_CUR_HP] = 0.0
 	ntf := &proto.LifeStateChangeNotify{
 		EntityId:        entity.GetId(),
 		LifeState:       uint32(entity.GetLifeState()),
@@ -2211,19 +2260,59 @@ func (g *Game) PacketSceneGadgetInfoTrifleItem(player *model.Player, gadgetTrifl
 		GadgetState:      gadgetTrifleItemEntity.GetGadgetState(),
 		IsEnableInteract: true,
 		AuthorityPeerId:  1,
+		Content:          nil,
+	}
+	itemId := gadgetTrifleItemEntity.GetItemId()
+	itemDataConfig := gdconf.GetItemDataById(int32(itemId))
+	if itemDataConfig == nil {
+		return sceneGadgetInfo
 	}
 	dbItem := player.GetDbItem()
-	sceneGadgetInfo.Content = &proto.SceneGadgetInfo_TrifleItem{
+	trifleItem := &proto.SceneGadgetInfo_TrifleItem{
 		TrifleItem: &proto.Item{
-			ItemId: gadgetTrifleItemEntity.GetItemId(),
-			Guid:   dbItem.GetItemGuid(gadgetTrifleItemEntity.GetItemId()),
-			Detail: &proto.Item_Material{
-				Material: &proto.Material{
-					Count: gadgetTrifleItemEntity.GetCount(),
-				},
-			},
+			ItemId: itemId,
+			Guid:   dbItem.GetItemGuid(itemId),
+			Detail: nil,
 		},
 	}
+	switch itemDataConfig.Type {
+	case constant.ITEM_TYPE_WEAPON:
+		trifleItem.TrifleItem.Detail = &proto.Item_Equip{
+			Equip: &proto.Equip{
+				IsLocked: false,
+				Detail: &proto.Equip_Weapon{
+					Weapon: &proto.Weapon{
+						Level:        1,
+						Exp:          0,
+						PromoteLevel: 0,
+						AffixMap:     nil,
+					},
+				},
+			},
+		}
+	case constant.ITEM_TYPE_RELIQUARY:
+		trifleItem.TrifleItem.Detail = &proto.Item_Equip{
+			Equip: &proto.Equip{
+				IsLocked: false,
+				Detail: &proto.Equip_Reliquary{
+					Reliquary: &proto.Reliquary{
+						Level:            1,
+						Exp:              0,
+						PromoteLevel:     0,
+						MainPropId:       0,
+						AppendPropIdList: nil,
+					},
+				},
+			},
+		}
+	default:
+		trifleItem.TrifleItem.Detail = &proto.Item_Material{
+			Material: &proto.Material{
+				Count: gadgetTrifleItemEntity.GetCount(),
+			},
+		}
+	}
+	sceneGadgetInfo.Content = trifleItem
 	return sceneGadgetInfo
 }
 

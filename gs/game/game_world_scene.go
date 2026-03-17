@@ -790,7 +790,7 @@ func (e *Entity) AbilityAction(ability *Ability, action *gdconf.ActionData, enti
 				action.Param1, action.Param2, action.Param3)
 		}
 	case "KillSelf":
-		GAME.KillEntity(owner, scene, entity.GetId(), proto.PlayerDieType_PLAYER_DIE_NONE)
+		GAME.SubEntityHp(owner, scene, entity.GetId(), 0.0, 1.0, proto.ChangHpReason_CHANGE_HP_SUB_ABILITY)
 	case "AvatarSkillStart":
 		abilityDataConfig := gdconf.GetAbilityDataByName(ability.abilityName)
 		if abilityDataConfig == nil {
@@ -846,7 +846,7 @@ func (e *Entity) AbilityAction(ability *Ability, action *gdconf.ActionData, enti
 		}
 		amount := ability.GetDynamicFloat(abilityDataConfig, action.Amount)
 		for _, worldAvatar := range world.GetPlayerWorldAvatarList(owner) {
-			GAME.AddPlayerAvatarHp(owner.PlayerId, worldAvatar.GetAvatarId(), amount, false, proto.ChangHpReason_CHANGE_HP_ADD_ABILITY)
+			GAME.AddPlayerAvatarHp(owner.PlayerId, worldAvatar.GetAvatarId(), amount, 0.0, proto.ChangHpReason_CHANGE_HP_ADD_ABILITY)
 		}
 	default:
 		logger.Error("not support ability action type: %v, abilityName: %v, entityId: %v", action.Type, ability.abilityName, entity.GetId())

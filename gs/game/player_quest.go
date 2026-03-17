@@ -237,13 +237,6 @@ func (g *Game) AcceptQuest(player *model.Player, notify bool) {
 			logger.Error("not support quest accept cond logic type: %v, questId: %v, uid: %v", questData.AcceptCondCompose, questData.QuestId, player.PlayerId)
 		}
 		if accept {
-			if questData.QuestId == 35304 {
-				// TODO 任务异常的权柄释放元素爆发时没有能量
-				world := WORLD_MANAGER.GetWorldById(player.WorldId)
-				if world != nil {
-					g.AddPlayerAvatarEnergy(player.PlayerId, world.GetPlayerActiveAvatarId(player), 0.0, true)
-				}
-			}
 			if questData.QuestId == 35722 {
 				// TODO 由于风龙任务进入秘境客户端会无限重连相关原因暂时屏蔽
 				g.SendPrivateChat(COMMAND_MANAGER.system, player.PlayerId, "quest finish 35722")
@@ -477,6 +470,14 @@ func (g *Game) ExecQuest(player *model.Player, questId uint32, questExecType int
 			}
 			rollbackQuest.State = constant.QUEST_STATE_UNSTARTED
 			g.StartQuest(player, rollbackQuest.QuestId, true)
+		case constant.QUEST_EXEC_TYPE_ADD_CUR_AVATAR_ENERGY:
+			world := WORLD_MANAGER.GetWorldById(player.WorldId)
+			if world == nil {
+				logger.Error("get world is nil, worldId: %v, uid: %v", player.WorldId, player.PlayerId)
+				continue
+			}
+			activeAvatarId := world.GetPlayerActiveAvatarId(player)
+			g.AddPlayerAvatarEnergy(player.PlayerId, activeAvatarId, 0.0, true)
 		default:
 			logger.Error("not support quest exec type: %v, questId: %v, uid: %v", questExec.Type, questId, player.PlayerId)
 		}

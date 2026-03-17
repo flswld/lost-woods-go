@@ -501,7 +501,7 @@ func (g *Game) EnterTransPointRegionNotify(player *model.Player, payloadMsg pb.M
 		if avatar.LifeState == constant.LIFE_STATE_DEAD {
 			g.RevivePlayerAvatar(player, worldAvatar.GetAvatarId())
 		}
-		g.AddPlayerAvatarHp(player.PlayerId, worldAvatar.GetAvatarId(), 0.0, true, proto.ChangHpReason_CHANGE_HP_ADD_STATUE)
+		g.AddPlayerAvatarHp(player.PlayerId, worldAvatar.GetAvatarId(), 0.0, 1.0, proto.ChangHpReason_CHANGE_HP_ADD_STATUE)
 	}
 }
 

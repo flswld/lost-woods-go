@@ -597,7 +597,7 @@ func (g *Game) UpgradePlayerAvatar(player *model.Player, avatar *model.Avatar, e
 	// 角色属性表更新通知
 	g.SendMsg(cmd.AvatarPropNotify, player.PlayerId, player.ClientSeq, g.PacketAvatarPropNotify(avatar))
 
-	g.AddPlayerAvatarHp(player.PlayerId, avatar.AvatarId, 0.0, true, proto.ChangHpReason_CHANGE_HP_ADD_UPGRADE)
+	g.AddPlayerAvatarHp(player.PlayerId, avatar.AvatarId, 0.0, 1.0, proto.ChangHpReason_CHANGE_HP_ADD_UPGRADE)
 }
 
 // UpdatePlayerAvatarFightProp 更新玩家角色战斗属性
@@ -703,13 +703,23 @@ func (g *Game) ChangePlayerAvatarSkillDepot(userId uint32, avatarId uint32, chan
 	}
 	fightPropEnergy := constant.ELEMENT_TYPE_FIGHT_PROP_ENERGY_MAP[int(avatarSkillDataConfig.CostElemType)]
 	avatar.FightPropMap[uint32(fightPropEnergy.MaxEnergy)] = float32(avatarSkillDataConfig.CostElemVal)
-	avatar.FightPropMap[uint32(fightPropEnergy.CurEnergy)] = float32(avatar.CurrEnergy)
-	g.UpdatePlayerAvatarFightProp(player.PlayerId, avatarId)
+	avatar.FightPropMap[uint32(fightPropEnergy.CurEnergy)] = 0.0
+
+	scene := world.GetSceneById(player.GetSceneId())
+	entity := scene.GetEntity(entityId)
+	if entity == nil {
+		logger.Error("get entity is nil, entityId: %v", entityId)
+		return
+	}
+	g.EntityFightPropUpdateNotifyBroadcast(scene, entity, map[uint32]float32{
+		uint32(fightPropEnergy.MaxEnergy): avatar.FightPropMap[uint32(fightPropEnergy.MaxEnergy)],
+		uint32(fightPropEnergy.CurEnergy): avatar.FightPropMap[uint32(fightPropEnergy.CurEnergy)],
+	})
 }
 
 // AddPlayerAvatarHp 角色加血
-func (g *Game) AddPlayerAvatarHp(userId uint32, avatarId uint32, value float32, max bool, reason proto.ChangHpReason) {
-	if value == 0.0 {
+func (g *Game) AddPlayerAvatarHp(userId uint32, avatarId uint32, value float32, percent float32, reason proto.ChangHpReason) {
+	if value == 0.0 && percent == 0.0 {
 		return
 	}
 	player := USER_MANAGER.GetOnlineUser(userId)
@@ -738,26 +748,21 @@ func (g *Game) AddPlayerAvatarHp(userId uint32, avatarId uint32, value float32, 
 	fightProp := entity.GetFightProp()
 	currHp := fightProp[constant.FIGHT_PROP_CUR_HP]
 	maxHp := fightProp[constant.FIGHT_PROP_MAX_HP]
-	deltaHp := float32(0.0)
-	if max {
-		deltaHp = maxHp - currHp
-		fightProp[constant.FIGHT_PROP_CUR_HP] = maxHp
+	lastHp := currHp
+	if percent != 0.0 {
+		currHp += maxHp * percent
 	} else {
 		currHp += value
-		deltaHp = value
-		if currHp > maxHp {
-			deltaHp = value - (currHp - maxHp)
-			currHp = maxHp
-		}
-		fightProp[constant.FIGHT_PROP_CUR_HP] = currHp
 	}
-
+	if currHp > maxHp {
+		currHp = maxHp
+	}
+	fightProp[constant.FIGHT_PROP_CUR_HP] = currHp
 	g.EntityFightPropUpdateNotifyBroadcast(scene, entity, map[uint32]float32{
 		constant.FIGHT_PROP_CUR_HP: fightProp[constant.FIGHT_PROP_CUR_HP],
 	})
-
 	g.SendMsg(cmd.EntityFightPropChangeReasonNotify, player.PlayerId, player.ClientSeq, &proto.EntityFightPropChangeReasonNotify{
-		PropDelta:      deltaHp,
+		PropDelta:      currHp - lastHp,
 		ChangeHpReason: reason,
 		EntityId:       entity.GetId(),
 		PropType:       constant.FIGHT_PROP_CUR_HP,
@@ -765,8 +770,8 @@ func (g *Game) AddPlayerAvatarHp(userId uint32, avatarId uint32, value float32, 
 }
 
 // SubPlayerAvatarHp 角色扣血
-func (g *Game) SubPlayerAvatarHp(userId uint32, avatarId uint32, value float32, max bool, reason proto.ChangHpReason) {
-	if value == 0.0 {
+func (g *Game) SubPlayerAvatarHp(userId uint32, avatarId uint32, value float32, percent float32, reason proto.ChangHpReason) {
+	if value == 0.0 && percent == 0.0 {
 		return
 	}
 	player := USER_MANAGER.GetOnlineUser(userId)
@@ -796,55 +801,55 @@ func (g *Game) SubPlayerAvatarHp(userId uint32, avatarId uint32, value float32, 
 	entity := scene.GetEntity(entityId)
 	fightProp := entity.GetFightProp()
 	currHp := fightProp[constant.FIGHT_PROP_CUR_HP]
-	deltaHp := float32(0.0)
-	if max {
-		deltaHp = currHp
-		fightProp[constant.FIGHT_PROP_CUR_HP] = 0.0
+	maxHp := fightProp[constant.FIGHT_PROP_MAX_HP]
+	lastHp := currHp
+	if percent != 0.0 {
+		currHp -= maxHp * percent
 	} else {
 		currHp -= value
-		deltaHp = -value
-		if currHp < 0.0 {
-			deltaHp = value - currHp
-			currHp = 0.0
-		}
-		fightProp[constant.FIGHT_PROP_CUR_HP] = currHp
 	}
-
+	if currHp < 0.0 {
+		currHp = 0.0
+	}
+	fightProp[constant.FIGHT_PROP_CUR_HP] = currHp
 	g.EntityFightPropUpdateNotifyBroadcast(scene, entity, map[uint32]float32{
 		constant.FIGHT_PROP_CUR_HP: fightProp[constant.FIGHT_PROP_CUR_HP],
 	})
-
 	g.SendMsg(cmd.EntityFightPropChangeReasonNotify, player.PlayerId, player.ClientSeq, &proto.EntityFightPropChangeReasonNotify{
-		PropDelta:      deltaHp,
+		PropDelta:      currHp - lastHp,
 		ChangeHpReason: reason,
 		EntityId:       entity.GetId(),
 		PropType:       constant.FIGHT_PROP_CUR_HP,
 	})
-
 	if currHp == 0.0 {
-		var dieType proto.PlayerDieType
-		switch reason {
-		case proto.ChangHpReason_CHANGE_HP_SUB_MONSTER:
-			dieType = proto.PlayerDieType_PLAYER_DIE_KILL_BY_MONSTER
-		case proto.ChangHpReason_CHANGE_HP_SUB_GEAR:
-			dieType = proto.PlayerDieType_PLAYER_DIE_KILL_BY_GEAR
-		case proto.ChangHpReason_CHANGE_HP_SUB_FALL:
-			dieType = proto.PlayerDieType_PLAYER_DIE_FALL
-		case proto.ChangHpReason_CHANGE_HP_SUB_DRAWN:
-			dieType = proto.PlayerDieType_PLAYER_DIE_DRAWN
-		case proto.ChangHpReason_CHANGE_HP_SUB_ABYSS:
-			dieType = proto.PlayerDieType_PLAYER_DIE_ABYSS
-		case proto.ChangHpReason_CHANGE_HP_SUB_GM:
-			dieType = proto.PlayerDieType_PLAYER_DIE_GM
-		case proto.ChangHpReason_CHANGE_HP_SUB_CLIMATE_COLD:
-			dieType = proto.PlayerDieType_PLAYER_DIE_CLIMATE_COLD
-		case proto.ChangHpReason_CHANGE_HP_SUB_STORM_LIGHTNING:
-			dieType = proto.PlayerDieType_PLAYER_DIE_STORM_LIGHTING
-		default:
-			dieType = proto.PlayerDieType_PLAYER_DIE_GM
-		}
+		dieType := g.GetPlayerDieTypeByChangHpReason(reason)
 		g.KillEntity(player, scene, entity.GetId(), dieType)
 	}
+}
+
+func (g *Game) GetPlayerDieTypeByChangHpReason(reason proto.ChangHpReason) proto.PlayerDieType {
+	var dieType proto.PlayerDieType
+	switch reason {
+	case proto.ChangHpReason_CHANGE_HP_SUB_MONSTER:
+		dieType = proto.PlayerDieType_PLAYER_DIE_KILL_BY_MONSTER
+	case proto.ChangHpReason_CHANGE_HP_SUB_GEAR:
+		dieType = proto.PlayerDieType_PLAYER_DIE_KILL_BY_GEAR
+	case proto.ChangHpReason_CHANGE_HP_SUB_FALL:
+		dieType = proto.PlayerDieType_PLAYER_DIE_FALL
+	case proto.ChangHpReason_CHANGE_HP_SUB_DRAWN:
+		dieType = proto.PlayerDieType_PLAYER_DIE_DRAWN
+	case proto.ChangHpReason_CHANGE_HP_SUB_ABYSS:
+		dieType = proto.PlayerDieType_PLAYER_DIE_ABYSS
+	case proto.ChangHpReason_CHANGE_HP_SUB_GM:
+		dieType = proto.PlayerDieType_PLAYER_DIE_GM
+	case proto.ChangHpReason_CHANGE_HP_SUB_CLIMATE_COLD:
+		dieType = proto.PlayerDieType_PLAYER_DIE_CLIMATE_COLD
+	case proto.ChangHpReason_CHANGE_HP_SUB_STORM_LIGHTNING:
+		dieType = proto.PlayerDieType_PLAYER_DIE_STORM_LIGHTING
+	default:
+		dieType = proto.PlayerDieType_PLAYER_DIE_GM
+	}
+	return dieType
 }
 
 // AddPlayerAvatarEnergy 角色恢复元素能量
@@ -938,6 +943,42 @@ func (g *Game) CostPlayerAvatarEnergy(userId uint32, avatarId uint32, value floa
 	g.EntityFightPropUpdateNotifyBroadcast(scene, entity, map[uint32]float32{
 		uint32(fightPropEnergy.CurEnergy): avatar.FightPropMap[uint32(fightPropEnergy.CurEnergy)],
 	})
+}
+
+// RevivePlayerAvatar 复活玩家活跃角色实体
+func (g *Game) RevivePlayerAvatar(player *model.Player, avatarId uint32) {
+	world := WORLD_MANAGER.GetWorldById(player.WorldId)
+	if world == nil {
+		return
+	}
+	scene := world.GetSceneById(player.GetSceneId())
+
+	dbAvatar := player.GetDbAvatar()
+	avatar := dbAvatar.GetAvatarById(avatarId)
+	if avatar == nil {
+		logger.Error("get avatar is nil, avatarId: %v", avatarId)
+		return
+	}
+
+	if avatar.LifeState != constant.LIFE_STATE_DEAD {
+		return
+	}
+	avatar.LifeState = constant.LIFE_STATE_ALIVE
+	entityId := world.GetPlayerWorldAvatarEntityId(player, avatarId)
+	entity := scene.GetEntity(entityId)
+	if entity != nil {
+		entity.SetLifeState(constant.LIFE_STATE_ALIVE)
+	}
+
+	ntf := &proto.AvatarLifeStateChangeNotify{
+		AvatarGuid:      avatar.Guid,
+		LifeState:       uint32(avatar.LifeState),
+		DieType:         proto.PlayerDieType_PLAYER_DIE_NONE,
+		MoveReliableSeq: 0,
+	}
+	g.SendToWorldA(world, cmd.AvatarLifeStateChangeNotify, 0, ntf, 0)
+
+	g.AddPlayerAvatarHp(player.PlayerId, avatarId, 0.0, 0.35, proto.ChangHpReason_CHANGE_HP_ADD_REVIVE)
 }
 
 /************************************************** 打包封装 **************************************************/
