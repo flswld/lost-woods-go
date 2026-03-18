@@ -1,19 +1,14 @@
 package gdconf
 
 import (
-	"strconv"
-	"strings"
-
 	"github.com/flswld/halo/logger"
 )
 
 // MainQuestData 主线任务配置表
 type MainQuestData struct {
-	ParentQuestId int32  `csv:"父任务ID"`
-	QuestReward   string `csv:"任务奖励RewardID,omitempty"`
-	VideoKey      uint64 `csv:"VideoKey,omitempty"`
-
-	RewardIdList []int32
+	ParentQuestId int32    `csv:"父任务ID"`
+	RewardIdList  IntArray `csv:"任务奖励RewardID,omitempty"`
+	VideoKey      uint64   `csv:"VideoKey,omitempty"`
 }
 
 func (g *GameDataConfig) loadMainQuestData() {
@@ -26,16 +21,6 @@ func (g *GameDataConfig) loadMainQuestData() {
 		mainQuestDataList := make([]*MainQuestData, 0)
 		readTable[MainQuestData](g.txtPrefix+fileName, &mainQuestDataList)
 		for _, mainQuestData := range mainQuestDataList {
-			mainQuestData.RewardIdList = make([]int32, 0)
-			if mainQuestData.QuestReward != "" {
-				for _, rewardIdStr := range strings.Split(mainQuestData.QuestReward, ",") {
-					rewardId, err := strconv.Atoi(rewardIdStr)
-					if err != nil {
-						panic(err)
-					}
-					mainQuestData.RewardIdList = append(mainQuestData.RewardIdList, int32(rewardId))
-				}
-			}
 			g.MainQuestDataMap[mainQuestData.ParentQuestId] = mainQuestData
 		}
 	}

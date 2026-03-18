@@ -231,7 +231,7 @@ func (c *Controller) v2Login(ctx *gin.Context) {
 		ctx.JSON(http.StatusOK, responseData)
 		return
 	}
-	if account.Token != loginData.Token {
+	if account.Token != "" && account.Token != loginData.Token {
 		logger.Error("token not match, account token: %v, client token: %v", account.Token, loginData.Token)
 		responseData.Retcode = -201
 		responseData.Message = "token错误"

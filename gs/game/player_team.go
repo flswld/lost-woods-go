@@ -468,16 +468,9 @@ func (g *Game) PacketAvatarAbilityControlBlock(avatarId uint32, skillDepotId uin
 		}
 		acb.AbilityEmbryoList = append(acb.AbilityEmbryoList, ae)
 	}
+	// 枫丹潜水ability
 	if SELF != nil && SELF.ClientVersion >= 400 {
-		defaultAbilityNameList := []string{
-			"Avatar_PlayerBoy_DiveStamina_Reduction",
-			"Ability_Avatar_Dive_SealEcho",
-			"Absorb_SealEcho_Bullet_01",
-			"Absorb_SealEcho_Bullet_02",
-			"Ability_Avatar_Dive_CrabShield",
-			"ActivityAbility_Absorb_Shoot",
-			"SceneAbility_DiveVolume",
-		}
+		defaultAbilityNameList := []string{"ActivityAbility_Absorb_Shoot"}
 		for _, defaultAbilityName := range defaultAbilityNameList {
 			abilityId++
 			ae := &proto.AbilityEmbryo{
@@ -524,8 +517,8 @@ func (g *Game) PacketTeamAbilityControlBlock() *proto.AbilityControlBlock {
 		AbilityEmbryoList: make([]*proto.AbilityEmbryo, 0),
 	}
 	abilityId := 0
+	// 枫丹潜水ability
 	if SELF != nil && SELF.ClientVersion >= 400 {
-		// 默认ability
 		defaultTeamAbilityNameList := []string{"Ability_Avatar_Dive_Team"}
 		for _, defaultTeamAbilityName := range defaultTeamAbilityNameList {
 			abilityId++

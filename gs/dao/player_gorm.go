@@ -124,6 +124,7 @@ func (d *Dao) QueryPlayerByIdGorm(playerId uint32) (*model.Player, error) {
 	if err != nil {
 		return nil, err
 	}
+	player.PlayerId = playerId
 	return player, nil
 }
 

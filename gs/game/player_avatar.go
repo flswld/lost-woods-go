@@ -425,7 +425,15 @@ func (g *Game) UnlockAvatarTalentReq(player *model.Player, payloadMsg pb.Message
 		return
 	}
 
-	ok = g.CostPlayerItem(player.PlayerId, []*ChangeItem{{ItemId: avatar.AvatarId - 10000000 + 1100, ChangeCount: 1}})
+	// TODO 读TalentSkillData表
+	itemId := uint32(0)
+	if avatar.AvatarId <= 10000099 {
+		itemId = avatar.AvatarId - 10000000 + 1100
+	} else {
+		itemId = avatar.AvatarId - 10000000 + 5000
+	}
+
+	ok = g.CostPlayerItem(player.PlayerId, []*ChangeItem{{ItemId: itemId, ChangeCount: 1}})
 	if !ok {
 		g.SendError(cmd.UnlockAvatarTalentRsp, player, &proto.UnlockAvatarTalentRsp{})
 		return

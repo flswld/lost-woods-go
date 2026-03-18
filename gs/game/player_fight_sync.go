@@ -781,7 +781,7 @@ func (g *Game) handleAbilityInvoke(player *model.Player, entry *proto.AbilityInv
 				return
 			}
 			if abilityScalarValueEntry.ValueType != proto.AbilityScalarType_ABILITY_SCALAR_TYPE_FLOAT {
-				logger.Error("param type not support, type: %v, uid: %v", abilityScalarValueEntry.ValueType, player.PlayerId)
+				// logger.Error("param type not support, type: %v, uid: %v", abilityScalarValueEntry.ValueType, player.PlayerId)
 				return
 			}
 			key := abilityScalarValueEntry.Key.GetHash()

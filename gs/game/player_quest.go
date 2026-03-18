@@ -239,7 +239,7 @@ func (g *Game) AcceptQuest(player *model.Player, notify bool) {
 		if accept {
 			if questData.QuestId == 35722 {
 				// TODO 由于风龙任务进入秘境客户端会无限重连相关原因暂时屏蔽
-				g.SendPrivateChat(COMMAND_MANAGER.system, player.PlayerId, "quest finish 35722")
+				COMMAND_MANAGER.PlayerInputCommand(player, COMMAND_MANAGER.system.PlayerId, "quest finish 35722")
 			}
 			dbQuest.AddQuest(uint32(questData.QuestId))
 			addQuestIdList = append(addQuestIdList, uint32(questData.QuestId))
@@ -471,6 +471,7 @@ func (g *Game) ExecQuest(player *model.Player, questId uint32, questExecType int
 			rollbackQuest.State = constant.QUEST_STATE_UNSTARTED
 			g.StartQuest(player, rollbackQuest.QuestId, true)
 		case constant.QUEST_EXEC_TYPE_ADD_CUR_AVATAR_ENERGY:
+			// 添加当前角色元素能量
 			world := WORLD_MANAGER.GetWorldById(player.WorldId)
 			if world == nil {
 				logger.Error("get world is nil, worldId: %v, uid: %v", player.WorldId, player.PlayerId)

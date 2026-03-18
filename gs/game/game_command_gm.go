@@ -375,6 +375,12 @@ func (g *GMCmd) GMSetWeather(userId uint32, climateType uint32) {
 
 // GMCreateMonster 在玩家附近创建怪物
 func (g *GMCmd) GMCreateMonster(userId uint32, monsterId uint32, posX, posY, posZ float64, count uint32, level uint8) {
+	if monsterId == 0 {
+		for _, monsterData := range gdconf.GetMonsterDataMap() {
+			monsterId = uint32(monsterData.MonsterId)
+			break
+		}
+	}
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {
 		logger.Error("player is nil, uid: %v", userId)
@@ -405,6 +411,12 @@ func (g *GMCmd) GMCreateMonster(userId uint32, monsterId uint32, posX, posY, pos
 
 // GMCreateGadget 在玩家附近创建物件
 func (g *GMCmd) GMCreateGadget(userId uint32, gadgetId uint32, count uint32) {
+	if gadgetId == 0 {
+		for _, gadgetData := range gdconf.GetGadgetDataMap() {
+			gadgetId = uint32(gadgetData.GadgetId)
+			break
+		}
+	}
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {
 		logger.Error("player is nil, uid: %v", userId)
@@ -552,6 +564,9 @@ func (g *GMCmd) GMFreeMode(userId uint32) {
 	GAME.ChangePlayerOpenState(player.PlayerId, constant.OPEN_STATE_LIMIT_REGION_FRESHMEAT, 1)
 	GAME.ChangePlayerOpenState(player.PlayerId, constant.OPEN_STATE_LIMIT_REGION_GLOBAL, 1)
 	GAME.ChangePlayerOpenState(player.PlayerId, constant.OPEN_STATE_MULTIPLAYER, 1)
+
+	g.GMUnlockAllArea(userId, 3)
+	g.GMUnlockAllPoint(userId, 3)
 }
 
 // GMChangeSkillDepot 切换当前角色技能库

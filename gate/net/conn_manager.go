@@ -204,6 +204,7 @@ func (c *ConnManager) acceptHandle(tcpMode bool, kcpListener *kcp.Listener, tcpL
 			kcpConn.SetWriteDelay(false)
 			kcpConn.SetWindowSize(256, 256)
 			kcpConn.SetMtu(1200)
+			kcpConn.SetNoDelay(1, 20, 2, 1)
 			conn = kcpConn
 		} else {
 			tcpConn, err := tcpListener.AcceptTCP()

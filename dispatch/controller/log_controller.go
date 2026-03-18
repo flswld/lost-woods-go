@@ -33,11 +33,7 @@ func (c *Controller) log8888(ctx *gin.Context) {
 		logger.Error("parse client log error: %v", err)
 		return
 	}
-	_, err = c.db.InsertClientLog(clientLog)
-	if err != nil {
-		logger.Error("insert client log error: %v", err)
-		return
-	}
+	logger.Error("[ClientLog] %+v", clientLog)
 	ctx.Header("Content-type", "application/json")
 	_, _ = ctx.Writer.WriteString("{\"code\":0}")
 }

@@ -133,6 +133,7 @@ func (d *Dao) QueryPlayerById(playerId uint32) (*model.Player, error) {
 			return nil, err
 		}
 	}
+	player.PlayerId = playerId
 	return player, nil
 }
 
