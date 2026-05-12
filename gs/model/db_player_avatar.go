@@ -1,5 +1,28 @@
 package model
 
+// 玩家角色子模型 - 持久化在玩家档（Db* 前缀表示持久化字段）
+//
+// **关键约定**：
+//   - `bson:"-" msgpack:"-"` 标签字段是"在线态"运行时数据 不持久化
+//     上线时由 InitAvatar/InitDbAvatar 重建（从 SkillLevelMap/Promote 等持久字段计算）
+//   - `Guid` 用雪花 id 生成（uint64 全服唯一）每次上线重新分配 不在存档里
+//   - `FightPropMap` 战斗属性 在线计算（基础值 + 武器加成 + 圣遗物加成）不存档
+//   - **CurrHP/CurrEnergy 在持久层** 这样下线后再上来不会满血复活
+//
+// 角色养成相关字段：
+//   - Level + Exp + Promote: 等级 + 经验 + 突破阶段（突破解锁等级上限）
+//   - SkillLevelMap: 三种技能（普攻/E/Q）等级 PromoteRewardMap: 突破奖励领取状态
+//   - TalentIdList: 已解锁命之座 ID 列表（最多 6 命 itemId+100 是命星道具）
+//   - FetterList + FetterLevel + FetterExp: 好感度系统（每聊天/任务后涨）
+//   - FlyCloak/Costume: 当前装配的风之翼/衣装（账号级 全角色共享 见 DbAvatar.FlyCloakList）
+//
+// 装备关系（在线态 EquipGuidMap）：
+//   - 武器 1 把（EquipWeapon）+ 圣遗物 5 件（EquipReliquaryMap[slot]）
+//   - 通过 Weapon/Reliquary.WearAvatarId 反向索引保证唯一装配
+//
+// **效果不生效现状**：命之座/天赋升级数据存档完整 但 Ability 系统未实现
+// 详见 CLAUDE.md "Ability 系统现状"
+
 import (
 	"time"
 
@@ -9,11 +32,12 @@ import (
 	"github.com/flswld/halo/logger"
 )
 
+// DbAvatar 角色模块根模型 挂在 Player.DbAvatar
 type DbAvatar struct {
-	AvatarMap        map[uint32]*Avatar // 角色列表
-	MainCharAvatarId uint32             // 主角id
-	FlyCloakList     []uint32           // 风之翼列表
-	CostumeList      []uint32           // 角色衣装列表
+	AvatarMap        map[uint32]*Avatar // 玩家拥有的角色 key:avatarId（如 10000007=荧）
+	MainCharAvatarId uint32             // 主角 id（只能是 10000005 空 / 10000007 荧 出生时选定）
+	FlyCloakList     []uint32           // 已解锁的风之翼 ID 列表（账号级 全角色共享）
+	CostumeList      []uint32           // 已解锁的角色衣装 ID 列表（账号级）
 }
 
 func (p *Player) GetDbAvatar() *DbAvatar {
@@ -156,7 +180,7 @@ func (a *DbAvatar) UpdateAvatarFightProp(avatar *Avatar) {
 			logger.Error("reliquaryItemConfig is nil, itemId: %v", reliquary.ItemId)
 			return
 		}
-		reliquaryMainConfig := gdconf.GetReliquaryMainDataByDepotIdAndPropId(reliquaryItemConfig.MainPropDepotId, int32(reliquary.MainPropId))
+		reliquaryMainConfig := gdconf.GetReliquaryMainDataByPropId(int32(reliquary.MainPropId))
 		if reliquaryMainConfig == nil {
 			logger.Error("reliquaryMainConfig is nil, mainPropDepotId: %v, mainPropId: %v", reliquaryItemConfig.MainPropDepotId, reliquary.MainPropId)
 			return
@@ -170,7 +194,7 @@ func (a *DbAvatar) UpdateAvatarFightProp(avatar *Avatar) {
 		avatar.FightPropMap[uint32(addProp.Type)] += addProp.Value
 		// 副词条
 		for _, appendPropId := range reliquary.AppendPropIdList {
-			reliquaryAffixConfig := gdconf.GetReliquaryAffixDataByDepotIdAndPropId(reliquaryItemConfig.AppendPropDepotId, int32(appendPropId))
+			reliquaryAffixConfig := gdconf.GetReliquaryAffixDataByPropId(int32(appendPropId))
 			if reliquaryAffixConfig == nil {
 				logger.Error("reliquaryAffixConfig is nil, appendPropDepotId: %v, appendPropId: %v", reliquaryItemConfig.AppendPropDepotId, appendPropId)
 				return
@@ -227,6 +251,16 @@ func (a *DbAvatar) AddAvatar(player *Player, avatarId uint32) {
 	a.AvatarMap[avatarId] = avatar
 	a.ChangeSkillDepot(avatarId, uint32(avatarDataConfig.SkillDepotId))
 	a.InitAvatar(player, avatar)
+}
+
+func (a *DbAvatar) DelAvatar(player *Player, avatarId uint32) {
+	avatar := a.AvatarMap[avatarId]
+	a.TakeOffWeapon(avatarId, avatar.EquipWeapon)
+	for _, reliquary := range avatar.EquipReliquaryMap {
+		a.TakeOffReliquary(avatarId, reliquary)
+	}
+	delete(a.AvatarMap, avatarId)
+	delete(player.GameObjectGuidMap, avatar.Guid)
 }
 
 func (a *DbAvatar) ChangeSkillDepot(avatarId uint32, skillDepotId uint32) {

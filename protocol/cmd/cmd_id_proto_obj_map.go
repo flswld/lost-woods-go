@@ -1,5 +1,35 @@
 package cmd
 
+// cmd_id ↔ proto 对象映射表 - 协议路由的核心数据结构
+//
+// 服务端用 cmd_id（uint16）做协议路由，但 protobuf 反序列化需要具体的 proto.Message 类型。
+// 这个文件维护 6 张映射表 + 2 张优化表，把"cmd_id 字面量"和"具体类型/对象/名字"双向关联：
+//
+//   1. cmdIdProtoObjMap        cmd_id → reflect.Type        反射 New 用（兜底慢路径）
+//   2. protoObjCmdIdMap        reflect.Type → cmd_id        SendMsg 时按对象类型反查 cmd_id
+//   3. cmdDeDupMap             cmd_id → bool                启动期重复注册检测（log Error 但不 panic）
+//   4. cmdIdCmdNameMap         cmd_id → "XxxReq"            日志/GM 命令显示用
+//   5. cmdNameCmdIdMap         "XxxReq" → cmd_id            gate ClientProtoProxy 翻译用
+//   6. cmdIdProtoObjCacheMap   cmd_id → *sync.Pool          对象池（复用 proto 对象减 GC）
+//   7. cmdIdProtoObjFastNewMap cmd_id → func() any          工厂闭包（绕过反射 比 reflect.New 快几倍）
+//
+// **三种取对象方式（性能从高到低）**：
+//
+//   - GetProtoObjFastNewByCmdId(cmdId) → 调闭包直接 new，无反射  ←【推荐】
+//   - GetProtoObjCacheByCmdId(cmdId)   → 从 sync.Pool 取（脏数据）   ←【高频路径用】
+//     · 配套 PutProtoObjCache 回收
+//     · 警告：取到的对象可能含上次使用的脏字段 调用方必须 Reset 或全字段覆盖
+//   - GetProtoObjByCmdId(cmdId)        → reflect.New 兜底           ←【备用】
+//
+// **重复注册不 panic**：cmdDeDupMap 检测到重复 cmd_id 仅 logger.Error
+// 配合 Makefile build 时的 `conflictPolicy=warn`，让"在 cmd_scene 和 cmd_widget 两处都注册"
+// 这种历史遗留问题不致命，启动仍能继续
+//
+// **两种注册模式（config.RegisterAllProtoMessage 切换）**：
+//   - true:  registerAllMessage()  全量注册项目 proto/ 下所有 .pb.go 类型
+//   - false: registerMessage()     仅注册业务代码用到的 ~440 个常用 cmd（手动维护）
+//   - 默认 standalone.toml 设 true 简化运维
+
 import (
 	"reflect"
 	"sync"
@@ -11,14 +41,16 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
+// CmdProtoMap 协议路由表 业务侧通过 NewCmdProtoMap 获得实例
+// 每个 MessageQueue 持有一个（用于 NetMsg 反序列化 PayloadMessage 时找对象类型）
 type CmdProtoMap struct {
-	cmdIdProtoObjMap        map[uint16]reflect.Type
-	protoObjCmdIdMap        map[reflect.Type]uint16
-	cmdDeDupMap             map[uint16]bool
-	cmdIdCmdNameMap         map[uint16]string
-	cmdNameCmdIdMap         map[string]uint16
-	cmdIdProtoObjCacheMap   map[uint16]*sync.Pool
-	cmdIdProtoObjFastNewMap map[uint16]func() any
+	cmdIdProtoObjMap        map[uint16]reflect.Type // cmd_id → reflect.Type
+	protoObjCmdIdMap        map[reflect.Type]uint16 // reflect.Type → cmd_id
+	cmdDeDupMap             map[uint16]bool         // 重复注册检测
+	cmdIdCmdNameMap         map[uint16]string       // cmd_id → "XxxReq"
+	cmdNameCmdIdMap         map[string]uint16       // "XxxReq" → cmd_id
+	cmdIdProtoObjCacheMap   map[uint16]*sync.Pool   // cmd_id → 对象池（高频复用）
+	cmdIdProtoObjFastNewMap map[uint16]func() any   // cmd_id → 工厂闭包（绕过反射）
 }
 
 func NewCmdProtoMap() (r *CmdProtoMap) {
@@ -120,7 +152,7 @@ func (c *CmdProtoMap) registerMessage() {
 	c.regMsg(SceneWeatherForcastRsp, func() any { return new(proto.SceneWeatherForcastRsp) })                 // 场景天气预测响应
 	c.regMsg(WorldPlayerLocationNotify, func() any { return new(proto.WorldPlayerLocationNotify) })           // 世界玩家位置通知
 	c.regMsg(ScenePlayerLocationNotify, func() any { return new(proto.ScenePlayerLocationNotify) })           // 场景玩家位置通知
-	c.regMsg(SceneForceUnlockNotify, func() any { return new(proto.SceneForceUnlockNotify) })                 // 场景强制解锁通知
+	c.regMsg(SceneForceUnlockNotify, func() any { return new(proto.SceneForceUnlockNotify) })                 // 场景已解锁力场通知
 	c.regMsg(PlayerWorldSceneInfoListNotify, func() any { return new(proto.PlayerWorldSceneInfoListNotify) }) // 玩家世界场景信息列表通知 地图上已解锁点亮的区域
 	c.regMsg(PlayerEnterSceneNotify, func() any { return new(proto.PlayerEnterSceneNotify) })                 // 玩家进入场景通知 通知客户端进入某个场景
 	c.regMsg(PlayerEnterSceneInfoNotify, func() any { return new(proto.PlayerEnterSceneInfoNotify) })         // 玩家进入场景信息通知 角色、队伍、武器等实体相关信息
@@ -180,6 +212,7 @@ func (c *CmdProtoMap) registerMessage() {
 	c.regMsg(WidgetDoBagRsp, func() any { return new(proto.WidgetDoBagRsp) })                                 // 小道具下包响应
 	c.regMsg(PersonalSceneJumpReq, func() any { return new(proto.PersonalSceneJumpReq) })                     // 场景跳转请求
 	c.regMsg(PersonalSceneJumpRsp, func() any { return new(proto.PersonalSceneJumpRsp) })                     // 场景跳转响应
+	c.regMsg(SceneDataNotify, func() any { return new(proto.SceneDataNotify) })                               // 场景标签数据通知
 
 	// 战斗与同步
 	c.regMsg(AvatarFightPropNotify, func() any { return new(proto.AvatarFightPropNotify) })                         // 角色战斗属性通知
@@ -317,6 +350,7 @@ func (c *CmdProtoMap) registerMessage() {
 	// 角色
 	c.regMsg(AvatarDataNotify, func() any { return new(proto.AvatarDataNotify) })                         // 角色信息通知
 	c.regMsg(AvatarAddNotify, func() any { return new(proto.AvatarAddNotify) })                           // 角色新增通知
+	c.regMsg(AvatarDelNotify, func() any { return new(proto.AvatarDelNotify) })                           // 角色删除通知
 	c.regMsg(AvatarLifeStateChangeNotify, func() any { return new(proto.AvatarLifeStateChangeNotify) })   // 角色存活状态改变通知
 	c.regMsg(AvatarUpgradeReq, func() any { return new(proto.AvatarUpgradeReq) })                         // 角色升级请求
 	c.regMsg(AvatarUpgradeRsp, func() any { return new(proto.AvatarUpgradeRsp) })                         // 角色升级响应
@@ -429,6 +463,8 @@ func (c *CmdProtoMap) registerMessage() {
 	c.regMsg(QuestDestroyNpcReq, func() any { return new(proto.QuestDestroyNpcReq) })                                   // 任务销毁npc请求
 	c.regMsg(QuestDestroyNpcRsp, func() any { return new(proto.QuestDestroyNpcRsp) })                                   // 任务销毁npc响应
 	c.regMsg(ChapterStateNotify, func() any { return new(proto.ChapterStateNotify) })                                   // 任务章节状态通知
+	c.regMsg(GetParentQuestVideoKeyReq, func() any { return new(proto.GetParentQuestVideoKeyReq) })                     // 获取任务剧情视频密钥请求
+	c.regMsg(GetParentQuestVideoKeyRsp, func() any { return new(proto.GetParentQuestVideoKeyRsp) })                     // 获取任务剧情视频密钥响应
 
 	// TODO 家园
 	c.regMsg(GetPlayerHomeCompInfoReq, func() any { return new(proto.GetPlayerHomeCompInfoReq) })
@@ -476,6 +512,12 @@ func (c *CmdProtoMap) registerMessage() {
 	c.regMsg(ChangeMailStarNotify, func() any { return new(proto.ChangeMailStarNotify) })     // 邮件收藏通知
 }
 
+// regMsg 注册单个 cmd_id ↔ proto 对象的映射（registerMessage/registerAllMessage 内部调用）
+//
+// 一次性建立 6 张映射 + sync.Pool（每个 cmd_id 独立 Pool 让对象类型隔离）
+// 重复注册 cmd_id 仅记录错误不 panic 见文件头说明
+//
+// cmdName 来源：反射 protoObj 的 Elem().Name()（如 *proto.PingReq → "PingReq"）
 func (c *CmdProtoMap) regMsg(cmdId uint16, protoObjNewFunc func() any) {
 	_, exist := c.cmdDeDupMap[cmdId]
 	if exist {
@@ -526,6 +568,10 @@ func (c *CmdProtoMap) PutProtoObjCache(cmdId uint16, protoObj pb.Message) {
 	cachePool.Put(protoObj)
 }
 
+// GetProtoObjFastNewByCmdId 走工厂闭包 new 对象 比反射快 是反序列化首选路径
+//
+// 用于 mq.parseNetMsg（[common/mq/nats.go:183]）反序列化 PayloadMessage 时
+// 闭包是 regMsg 时保存的 `func() any { return new(proto.XxxReq) }` 直接调闭包不走反射
 func (c *CmdProtoMap) GetProtoObjFastNewByCmdId(cmdId uint16) pb.Message {
 	fn, exist := c.cmdIdProtoObjFastNewMap[cmdId]
 	if !exist {

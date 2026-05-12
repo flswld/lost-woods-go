@@ -1,3 +1,9 @@
+// SDK 全局信息表 - 仅存放 1 行（ID=1）的全局状态
+//
+// 当前仅 1 个字段 nextSdkAccountId（账号自增计数器）
+// standalone 模式：服务启动时读出来 关闭时写回 减少 DB 写入次数
+// 集群模式：每次注册新账号都直接走 GetNextSdkAccountId 用 DB 自增锁
+
 package dao
 
 import (

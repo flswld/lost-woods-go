@@ -1,3 +1,17 @@
+// 原神客户端硬编码魔数表 - Ec2b 派生密钥时 keyScramble 阶段用
+//
+// **这两张表不是 AES 标准的轮密钥**：keyScramble 借用了 AES 的 S-box / shiftRows / mixCols
+// 等操作组件 但整体不是 AES 块加密 而是一种"密钥置乱"算法 详见 hk4e_ec2b.go
+//
+// keyXorTable: 16 字节 用于 keyScramble 第一步对 16 字节 key 做 XOR 初始化
+// aesXorTable: 2 × 2816 字节（11 轮 × 256 字节 × 2 张）用于每轮中间结果的 XOR 扰动
+//
+// 这些表来自原神客户端二进制反编译 与官方完全一致
+// **绝对不能改任何字节**：改了就没法和客户端通信
+//
+// "DEAD CAFE FACE B00C" 这种魔法字面量明显是程序员的彩蛋
+// 但在 hk4e 协议中是固定值 不能解读为可改的"风格"
+
 package random
 
 var keyXorTable = [16]byte{

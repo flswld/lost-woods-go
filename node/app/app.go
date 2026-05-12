@@ -17,6 +17,21 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// node 服启动入口（必须**最先**启动 其他所有服务依赖它）
+//
+// 启动顺序：
+//  1. 直接连 NATS（不走 DiscoveryClient 因为自己就是被发现的目标）
+//  2. 启动 MessageQueue（仅用来监听全服广播）
+//  3. 连 DB（持久化 Region 表 含 Ec2b/NextUid/StopServerInfo）
+//  4. 启动 service.NewService（注册 natsrpc Server + 启动 DiscoveryService）
+//
+// 与其他服务不同：
+//   - 不向 Node 注册自己（自己就是注册中心）
+//   - 不需要 KeepaliveServer
+//   - MQ AppId 固定为 "node"
+//
+// **单点故障**：Node 是集群唯一注册中心 挂了所有服务都无法新建连接
+// 已注册的连接还能维持工作 但路由变更会失效
 func Run(ctx context.Context) error {
 	if !config.GetConfig().Hk4e.StandaloneModeEnable {
 		logger.InitLogger(&logger.Config{

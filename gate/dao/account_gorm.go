@@ -6,6 +6,16 @@ import (
 	"gorm.io/gorm"
 )
 
+// AccountGorm gate 账号表（GORM 模式 mysql / sqlite 用）
+//
+// 字段：
+//   - OpenId: SDK 账号 ID（来自 dispatch 的 SdkAccount.AccountId 字符串形式）主键
+//   - Uid: 玩家 uid（首次登录时通过 Node.GetNextUid 分配 1 亿+）
+//   - IsForbid: 是否被封号
+//   - ForbidEndTime: 封号截止时间（0 表示永久封）
+//
+// 一个 OpenId 对应一个 Uid（一对一关系 不支持小号机制）
+// 表名 "account" Mongo 模式集合名相同
 type AccountGorm struct {
 	OpenId        string `gorm:"column:open_id;type:varchar(255);primaryKey"`
 	Uid           uint32 `gorm:"column:uid;type:bigint(20)"`

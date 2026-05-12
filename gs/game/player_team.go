@@ -12,8 +12,26 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
+// 队伍管理 模块
+//
+// 玩家共有 4 个常驻队伍（4 套队伍配置 可独立切换）+ 多人世界队伍（专门用于联机）
+// 每个队伍最多 4 人 玩家可任意排列已拥有的角色
+// 全局有"当前出战队"概念 决定大世界中实际带的角色
+//
+// 主要请求：
+//   - ChangeAvatarReq: 切换出战角色（队内切人 不改队伍构成）
+//   - SetUpAvatarTeamReq: 编辑指定队伍的角色构成（添加/移除/排序）
+//   - ChooseCurAvatarTeamReq: 切换出战队伍（如从 1 队切到 2 队）
+//   - ChangeMpTeamAvatarReq: 多人世界队伍调整（不影响单人队伍配置）
+//   - AvatarDieAnimationEndReq: 角色死亡动画结束 → 自动切换到下一个活角色或全队死亡
+//   - WorldPlayerReviveReq: 世界复活（七天神像/复苏材料）
+//
+// AI 世界限制：ChangeMpTeamAvatarReq 在 AI 世界被拒绝（PUBG 玩法不让玩家随意改队伍）
+
 /************************************************** 接口请求 **************************************************/
 
+// ChangeAvatarReq 切换出战角色请求（队内切人 如 1队 钟离切到香菱）
+// 与 SetUpAvatarTeamReq 的区别：不改队伍构成 只改 dbTeam.CurrAvatarIndex 出战索引
 func (g *Game) ChangeAvatarReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.ChangeAvatarReq)
 	targetAvatar, ok := player.GameObjectGuidMap[req.Guid].(*model.Avatar)
@@ -31,6 +49,12 @@ func (g *Game) ChangeAvatarReq(player *model.Player, payloadMsg pb.Message) {
 	g.SendMsg(cmd.ChangeAvatarRsp, player.PlayerId, player.ClientSeq, rsp)
 }
 
+// SetUpAvatarTeamReq 编辑队伍构成请求
+//
+// 校验：teamId 范围 1-4 + 角色数量 1-4 + 不能编辑当前出战队为空
+// v4.0+ 客户端：编辑当前出战队时如果出战角色变了 还要发 VISION_REPLACE 让其他玩家看到角色切换
+//
+//	v4.0 之前用 VISION_BORN/VISION_MISS 一对 这里特殊处理是因为新版本动画连贯性要求
 func (g *Game) SetUpAvatarTeamReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.SetUpAvatarTeamReq)
 	teamId := req.TeamId
@@ -96,6 +120,10 @@ func (g *Game) SetUpAvatarTeamReq(player *model.Player, payloadMsg pb.Message) {
 	}
 }
 
+// ChooseCurAvatarTeamReq 切换出战队伍请求（如从 1 队切到 2 队）
+//
+// 多人世界禁止切队伍（多人世界用专门的多人队伍 通过 ChangeMpTeamAvatarReq）
+// 切队伍后：dbTeam.CurrTeamIndex 改变 + 出战角色重置为新队第 1 个 + 重新生成 worldAvatar 实体
 func (g *Game) ChooseCurAvatarTeamReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.ChooseCurAvatarTeamReq)
 	teamId := req.TeamId
@@ -154,6 +182,11 @@ func (g *Game) ChooseCurAvatarTeamReq(player *model.Player, payloadMsg pb.Messag
 	}
 }
 
+// ChangeMpTeamAvatarReq 多人世界队伍调整请求
+//
+// 多人世界 4 人共享一个"多人队伍" 每人最多 4 个角色 总人数受限于队伍可用槽位
+// 多人队伍配置不持久化（不写入 dbTeam）只影响当前多人世界
+// AI 世界（PUBG）禁用此请求 → AI 世界队伍配置由系统固定（每人只有 1 个角色）
 func (g *Game) ChangeMpTeamAvatarReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.ChangeMpTeamAvatarReq)
 	avatarIdList := make([]uint32, 0)
@@ -225,6 +258,16 @@ func (g *Game) ChangeMpTeamAvatarReq(player *model.Player, payloadMsg pb.Message
 	}
 }
 
+// AvatarDieAnimationEndReq 角色死亡动画结束请求
+//
+// 触发时机：角色血量归零→播放死亡动画→动画结束 客户端发此请求
+//
+// 处理分支：
+//  1. 溺水死亡（DIE_DRAWN）：耐力扣半 → TeleportPlayer 复活原位置
+//  2. 其他死亡：找队内还活着的下一个角色 → ChangeAvatar 切换出战
+//  3. 全队死亡：发 WorldPlayerDieNotify 客户端弹复活界面（让玩家选七天神像/付费复活）
+//
+// 用 PluginEventIdAvatarDieAnimationEnd 事件让 PUBG 插件介入死亡处理（吃鸡淘汰逻辑）
 func (g *Game) AvatarDieAnimationEndReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.AvatarDieAnimationEndReq)
 
@@ -284,6 +327,10 @@ func (g *Game) AvatarDieAnimationEndReq(player *model.Player, payloadMsg pb.Mess
 	g.SendMsg(cmd.AvatarDieAnimationEndRsp, player.PlayerId, player.ClientSeq, &proto.AvatarDieAnimationEndRsp{SkillId: req.SkillId, DieGuid: req.DieGuid})
 }
 
+// WorldPlayerReviveReq 世界复活请求（七天神像/复苏材料/付费复活）
+//
+// AI 世界特殊：调 ReLoginPlayer 让玩家重连重生（PUBG 玩法吃鸡淘汰后重开一局）
+// 普通世界：TeleportPlayer 原地传送一次（触发场景四步状态机里的"复活"分支 → 全队回血）
 func (g *Game) WorldPlayerReviveReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.WorldPlayerReviveReq)
 	_ = req
@@ -308,6 +355,14 @@ func (g *Game) WorldPlayerReviveReq(player *model.Player, payloadMsg pb.Message)
 
 /************************************************** 游戏功能 **************************************************/
 
+// ChangeAvatar 切换队内出战角色（核心实现）
+//
+// 处理：
+//  1. 校验目标角色不能是当前出战角色（避免重复切人）+ 必须在队伍中
+//  2. dbTeam.CurrAvatarIndex 切到新角色（仅单人世界 多人世界由 worldTeam 管理）
+//  3. 老角色实体设为 STANDBY 状态
+//  4. 广播 SceneEntityDisappearNotify(VISION_REPLACE) + SceneEntityAppearNotify(VISION_REPLACE)
+//     用 VISION_REPLACE 是为了让客户端做平滑切换动画（不是单纯的死亡+出生）
 func (g *Game) ChangeAvatar(player *model.Player, targetAvatarId uint32) {
 	world := WORLD_MANAGER.GetWorldById(player.WorldId)
 	if world == nil {
@@ -353,6 +408,14 @@ func (g *Game) ChangeAvatar(player *model.Player, targetAvatarId uint32) {
 	g.SendToSceneA(scene, cmd.SceneEntityAppearNotify, player.ClientSeq, sceneEntityAppearNotify, 0)
 }
 
+// ChangeTeam 修改指定队伍的角色构成（仅单人世界）
+//
+// 处理：
+//  1. 写入 dbTeam.TeamList[teamId-1].AvatarIdList
+//  2. 全量发送 AvatarTeamUpdateNotify 给客户端（包含所有 4 队的最新构成）
+//  3. 如果改动的是当前出战队 → 同步更新 World 中的 LocalTeam + 重新生成实体 + 发 SceneTeamUpdateNotify
+//
+// 多人世界禁止改队：多人世界用专门的多人队伍（ChangeMpTeamAvatarReq）
 func (g *Game) ChangeTeam(player *model.Player, teamId uint32, avatarIdList []uint32, currAvatarId uint32) {
 	world := WORLD_MANAGER.GetWorldById(player.WorldId)
 	if world == nil {
@@ -452,7 +515,16 @@ func (g *Game) PacketSceneTeamUpdateNotify(world *World, player *model.Player) *
 	return sceneTeamUpdateNotify
 }
 
-// PacketAvatarAbilityControlBlock 角色的ability控制块
+// PacketAvatarAbilityControlBlock 打包角色的 Ability 控制块（进场景时下发）
+//
+// 客户端进场景前需要预加载所有 ability 资源 控制块就是告诉客户端要加载哪些 ability：
+//   - 默认 ability 列表（gdconf.GetDefaultAbilityNameList）：所有角色通用
+//   - v4.0+ 枫丹潜水 ability：ActivityAbility_Absorb_Shoot（4.0 加的潜水玩法）
+//   - 角色专属 ability（avatarDataConfig.ConfigAbility）：角色普攻/E/Q 的 ability
+//   - 技能库 ability（skillDepot.ConfigAbility.TargetAbilities）：元素相关 ability
+//
+// 注释里 "TODO 队伍 ability" + "TODO 装备 ability"：圣遗物套装效果/武器精炼效果都属于这部分 项目未实现
+// 这就是为什么"装备/精炼/套装效果不生效"的根本原因——客户端根本没收到要加载这些 ability 的指令
 func (g *Game) PacketAvatarAbilityControlBlock(avatarId uint32, skillDepotId uint32) *proto.AbilityControlBlock {
 	acb := &proto.AbilityControlBlock{
 		AbilityEmbryoList: make([]*proto.AbilityEmbryo, 0),

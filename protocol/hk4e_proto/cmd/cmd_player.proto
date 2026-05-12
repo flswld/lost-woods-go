@@ -1,3 +1,5 @@
+// 玩家相关协议
+
 syntax = "proto3";
 
 package proto;
@@ -13,6 +15,7 @@ enum CompoundBoostTakeStatusType {
     COMPOUND_BOOST_TAKE_STATUS_BAG_FULL = 3;
 }
 
+// 获取玩家token
 message GetPlayerTokenReq {
     enum CmdId {
         option allow_alias = true;
@@ -23,18 +26,18 @@ message GetPlayerTokenReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    string account_ext = 9;
-    string account_token = 10;
+    string account_ext = 9;      // 额外信息
+    string account_token = 10;   // token,服务器用来做二次身份验证
     uint32 channel_id = 15;
-    bool is_guest = 6;
+    bool is_guest = 6;           // 客户端登入时，平台的返回值
     string psn_region = 4;
     uint32 sub_channel_id = 8;
-    string account_uid = 11;
+    string account_uid = 11;     // 对应账号的uid
     uint32 key_id = 1787;
-    uint32 account_type = 1;
-    uint32 cloud_client_ip = 14;
+    uint32 account_type = 1;     // 账号类型
+    uint32 cloud_client_ip = 14; // 玩家通过云游戏APP登录时使用，玩家的真实IP
     uint32 minors_reg_min_age = 995;
-    uint32 uid = 2;
+    uint32 uid = 2;              // 指定登录某个UID，当该字段被赋值后，account字段会被忽略
     string online_id = 7;
     string birthday = 1718;
     string client_ip_str = 3;
@@ -59,34 +62,34 @@ message GetPlayerTokenRsp {
     uint32 minors_reg_min_age = 1561;
     uint32 channel_id = 896;
     uint32 platform_type = 8;
-    string account_uid = 12;
+    string account_uid = 12;        // 对应账号的uid
     bool is_login_white_list = 573;
     bool is_guest = 4;
-    uint32 black_uid_end_time = 14;
+    uint32 black_uid_end_time = 14; // 黑名单结束原因
     bool is_watchdog_uid = 2028;
     string psn_id = 1811;
     uint32 tag = 1635;
     string country_code = 2013;
-    string token = 11;
+    string token = 11;              // 也是account_token
     uint32 sub_channel_id = 1802;
     bytes security_cmd_buffer = 6;
     string client_version_random_key = 1529;
     string birthday = 937;
-    uint64 secret_key_seed = 13;
-    uint32 account_type = 5;
-    string msg = 7;
+    uint64 secret_key_seed = 13;    // 协议加密密钥种子
+    uint32 account_type = 5;        // 账号类型
+    string msg = 7;                 // 提示信息
     repeated uint32 finish_collection_id_list = 1640;
     string sign = 1140;
-    string secret_key = 15;
+    string secret_key = 15;         // 协议加密密钥
     StopServerInfo stop_server = 1382;
     int32 retcode = 2;
-    uint32 uid = 1;
-    bool is_proficient_player = 9;
+    uint32 uid = 1;                 // 游戏内的UID
+    bool is_proficient_player = 9;  // 是否是一个老玩家
     uint32 reg_platform = 1112;
     string server_rand_key = 1493;
     bytes extra_bin_data = 3;
     string client_ip_str = 860;
-    uint32 gm_uid = 10;
+    uint32 gm_uid = 10;             // 免密登入的原始运营uid(仅服务端内部使用)
     uint32 key_id = 1172;
 }
 
@@ -109,6 +112,7 @@ message AdjustTrackingInfo {
     string fire_adid = 13;
 }
 
+// 玩家登陆请求
 message PlayerLoginReq {
     enum CmdId {
         option allow_alias = true;
@@ -119,48 +123,48 @@ message PlayerLoginReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 language_type = 6;
+    uint32 language_type = 6;      // 客户端的语言
     uint32 reg_platform = 615;
     TrackingIOInfo tracking_io_info = 1660;
-    uint32 account_type = 13;
-    string token = 15;
+    uint32 account_type = 13;      // 账号类型, gateserver填充
+    string token = 15;             // == account_token
     bytes extra_bin_data = 1458;
     uint32 channel_id = 1314;
     uint32 client_data_version = 688;
-    string account_uid = 2;
-    string client_version = 12;
+    string account_uid = 2;        // 对应账号的uid, gateserver填充
+    string client_version = 12;    // 客户端版本号
     string security_library_md5 = 772;
     string country_code = 2000;
     string psn_id = 1268;
     uint32 client_port = 431;
-    string device_name = 9;
+    string device_name = 9;        // 设备名称
     string cps = 1163;
-    uint64 login_rand = 3;
+    uint64 login_rand = 3;         // 登入随机数
     uint32 target_home_param = 984;
     AdjustTrackingInfo adjust_tracking_info = 1816;
     bool is_transfer = 908;
     uint32 tag = 1787;
-    bool is_guest = 5;
+    bool is_guest = 5;             // 客户端填充, TODO...替换Token中的is_guest
     bytes environment_error_code = 2026;
     string online_id = 903;
-    bool is_editor = 8;
+    bool is_editor = 8;            // 是否是unity客户端, gateserver填充
     string checksum_client_version = 861;
     bytes security_cmd_reply = 1995;
     string security_library_version = 1213;
     string birthday = 1652;
-    string device_uuid = 4;
+    string device_uuid = 4;        // 设备唯一ID
     uint32 client_token = 1546;
     uint32 sub_channel_id = 23;
-    uint32 target_uid = 11;
-    string device_info = 1;
+    uint32 target_uid = 11;        // 进入别人的世界的uid, 服务端设置，客户端不要填充
+    string device_info = 1;        // 设备信息，例如samsung SM-G9250
     string client_verison_hash = 1707;
     string checksum = 1532;
-    uint32 platform_type = 14;
+    uint32 platform_type = 14;     // 平台类型，PlatformType，如果玩家通过云游戏平台登录，该字段应该是CLOUD_ANDROID或CLOUD_IOS
     uint32 target_home_owner_uid = 1864;
-    uint32 cloud_client_ip = 1335;
-    uint32 gm_uid = 612;
-    string system_version = 10;
-    string platform = 7;
+    uint32 cloud_client_ip = 1335; // 玩家通过云游戏APP登录时使用，玩家的真实IP
+    uint32 gm_uid = 612;           // 免密登入的原始运营uid(gateserver填充)
+    string system_version = 10;    // 系统版本号
+    string platform = 7;           // 平台，例如android，ios，pc
 }
 
 message ShortAbilityHashPair {
@@ -177,43 +181,45 @@ message PlayerLoginRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 client_data_version = 1;
+    uint32 client_data_version = 1;              // gameserver的数值版本号
     bool is_sc_open = 1429;
     int32 retcode = 15;
-    map<uint32, BlockInfo> block_info_map = 571;
+    map<uint32, BlockInfo> block_info_map = 571; // 当从save wait加载的时候 会携带部分block数据
     bool is_audit = 1685;
     bool is_transfer = 2018;
-    string client_silence_md5 = 1746;
+    string client_silence_md5 = 1746;            // 静默数值Md5
     ResVersionConfig next_res_version_config = 1573;
-    uint32 client_silence_data_version = 6;
-    uint64 login_rand = 4;
-    bool is_new_player = 8;
+    // uint32 res_version_ex = 12;        // 小包资源版本号
+    uint32 client_silence_data_version = 6;      // gameserver的数值静默版本号
+    uint64 login_rand = 4;                       // 登入随机数
+    bool is_new_player = 8;                      // 是否为新创建的账号
     string client_version_suffix = 1047;
-    string game_biz = 5;
+    string game_biz = 5;                         // 运营要求的game_biz
     string next_resource_url = 621;
-    bool is_relogin = 10;
+    bool is_relogin = 10;                        // 是否为重新登陆(服务器还有玩家数据的缓存)
     double total_tick_time = 125;
     bool is_enable_client_hash_debug = 932;
     bytes sc_info = 2024;
-    int32 ability_hash_code = 12;
+    int32 ability_hash_code = 12;                // 技能配置hash码
     string register_cps = 2040;
     bool is_login_rsp_split = 1649;
-    bool is_use_ability_hash = 2;
-    map<string, int32> ability_hash_map = 11;
+    bool is_use_ability_hash = 2;                // 是否使用技能hash码
+    map<string, int32> ability_hash_map = 11;    // 所有技能的hash码，Debug模式下才有效
     repeated ShortAbilityHashPair short_ability_hash_map = 250;
-    string client_md5 = 1830;
+    string client_md5 = 1830;                    // 客户端数值Md5
     string country_code = 1900;
     bool is_data_need_relogin = 951;
-    ResVersionConfig res_version_config = 1969;
+    ResVersionConfig res_version_config = 1969;  // TODO...删除res_version/res_md5/is_res_need_relogin
     repeated FeatureBlockInfo feature_block_info_list = 1352;
     string birthday = 624;
-    uint32 target_uid = 14;
-    bytes player_data = 13;
+    uint32 target_uid = 14;                      // 进入别人的世界的uid
+    bytes player_data = 13;                      // 账号数据(服务器内部数据)
     string client_silence_version_suffix = 1299;
     uint32 target_home_owner_uid = 553;
-    uint32 player_data_version = 7;
+    uint32 player_data_version = 7;              // 消息里再放一份，方便登录的时候校验
 }
 
+// 玩家登出请求
 message PlayerLogoutReq {
     enum CmdId {
         option allow_alias = true;
@@ -224,18 +230,19 @@ message PlayerLogoutReq {
         IS_ALLOW_CLIENT = 1;
     }
 
+    // 登出原因
     enum Reason {
-        DISCONNECT = 0;
-        CLIENT_REQ = 1;
-        TIMEOUT = 2;
-        ADMIN_REQ = 3;
-        SERVER_CLOSE = 4;
-        GM_CLEAR = 5;
-        PLAYER_TRANSFER = 6;
+        DISCONNECT = 0;      // 断线
+        CLIENT_REQ = 1;      // 客户端主动请求退出
+        TIMEOUT = 2;         // 连接超时
+        ADMIN_REQ = 3;       // 管理员强制退出
+        SERVER_CLOSE = 4;    // 关闭服务
+        GM_CLEAR = 5;        // GM CLEAR ALL
+        PLAYER_TRANSFER = 6; // 玩家迁移
         CLIENT_CHECKSUM_INVALID = 7;
     }
 
-    Reason reason = 6;
+    Reason reason = 6; // 退出游戏的原因
 }
 
 message PlayerLogoutRsp {
@@ -250,6 +257,7 @@ message PlayerLogoutRsp {
     int32 retcode = 12;
 }
 
+// 服务器->客户端掉线通知
 message PlayerLogoutNotify {
     enum CmdId {
         NONE = 0;
@@ -259,6 +267,7 @@ message PlayerLogoutNotify {
     int32 retcode = 13;
 }
 
+// 玩家数据通知
 message PlayerDataNotify {
     enum CmdId {
         option allow_alias = true;
@@ -268,13 +277,14 @@ message PlayerDataNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint64 server_time = 7;
+    uint64 server_time = 7;               // 服务器时间(1970.1.1开始的毫秒数)
     string nick_name = 8;
-    bool is_first_login_today = 12;
-    uint32 region_id = 6;
-    map<uint32, PropValue> prop_map = 15;
+    bool is_first_login_today = 12;       // 是否是当日的首次登陆
+    uint32 region_id = 6;                 // 分区ID
+    map<uint32, PropValue> prop_map = 15; // 玩家属性列表
 }
 
+// 修改游戏时间
 message ChangeGameTimeReq {
     enum CmdId {
         option allow_alias = true;
@@ -285,8 +295,8 @@ message ChangeGameTimeReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 game_time = 6;
-    bool is_force_set = 11;
+    uint32 game_time = 6;   // 游戏时间
+    bool is_force_set = 11; // 是否无视时间锁，强制设置时间
     uint32 extra_days = 12;
 }
 
@@ -301,9 +311,10 @@ message ChangeGameTimeRsp {
 
     int32 retcode = 8;
     uint32 extra_days = 5;
-    uint32 cur_game_time = 14;
+    uint32 cur_game_time = 14; // 当前的游戏时间
 }
 
+// 玩家的游戏时间通知
 message PlayerGameTimeNotify {
     enum CmdId {
         option allow_alias = true;
@@ -314,11 +325,12 @@ message PlayerGameTimeNotify {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 uid = 7;
-    uint32 game_time = 3;
+    uint32 uid = 7;       // 所属玩家的uid
+    uint32 game_time = 3; // 当前游戏时间(首次登录当天0点开始的秒数，离线后不计时)
     bool is_home = 13;
 }
 
+// 玩家的属性通知(改变后通知)
 message PlayerPropNotify {
     enum CmdId {
         option allow_alias = true;
@@ -328,9 +340,10 @@ message PlayerPropNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    map<uint32, PropValue> prop_map = 13;
+    map<uint32, PropValue> prop_map = 13; // 属性列表
 }
 
+// 客户端触发事件通知(C->S)
 message ClientTriggerEventNotify {
     enum CmdId {
         option allow_alias = true;
@@ -345,6 +358,7 @@ message ClientTriggerEventNotify {
     EventTriggerType event_type = 2;
 }
 
+// 设置玩家属性(允许客户端修改的才能通过)
 message SetPlayerPropReq {
     enum CmdId {
         option allow_alias = true;
@@ -355,7 +369,7 @@ message SetPlayerPropReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    repeated PropValue prop_list = 7;
+    repeated PropValue prop_list = 7; // 改变的属性列表
 }
 
 message SetPlayerPropRsp {
@@ -370,6 +384,8 @@ message SetPlayerPropRsp {
     int32 retcode = 11;
 }
 
+// 设置玩家出生数据
+// TODO 临时方案，以后会做成正式的角色性别选取
 message SetPlayerBornDataReq {
     enum CmdId {
         option allow_alias = true;
@@ -396,6 +412,7 @@ message SetPlayerBornDataRsp {
     int32 retcode = 10;
 }
 
+// 通知客户端进行新账号初始化 S->C
 message DoSetPlayerBornDataNotify {
     enum CmdId {
         option allow_alias = true;
@@ -406,6 +423,7 @@ message DoSetPlayerBornDataNotify {
     }
 }
 
+// 经验变化时用于同步变化量，客户端用来做表现
 message PlayerPropChangeNotify {
     enum CmdId {
         option allow_alias = true;
@@ -415,10 +433,11 @@ message PlayerPropChangeNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 prop_delta = 13;
-    uint32 prop_type = 12;
+    uint32 prop_delta = 13; // 变化量
+    uint32 prop_type = 12;  // 属性类型（目前只有经验）
 }
 
+// 设置玩家名字
 message SetPlayerNameReq {
     enum CmdId {
         option allow_alias = true;
@@ -497,6 +516,7 @@ message OpenStateChangeNotify {
     map<uint32, uint32> open_state_map = 4;
 }
 
+// 烹饪
 message PlayerCookReq {
     enum CmdId {
         option allow_alias = true;
@@ -508,9 +528,9 @@ message PlayerCookReq {
     }
 
     uint32 cook_count = 1;
-    uint32 qte_quality = 12;
-    uint32 recipe_id = 8;
-    uint32 assist_avatar = 14;
+    uint32 qte_quality = 12;   // QTE的结果, 0表示自动烹饪
+    uint32 recipe_id = 8;      // 食谱编号
+    uint32 assist_avatar = 14; // 辅助avatar
 }
 
 message PlayerCookRsp {
@@ -526,10 +546,11 @@ message PlayerCookRsp {
     uint32 cook_count = 12;
     repeated ItemParam item_list = 11;
     int32 retcode = 3;
-    uint32 qte_quality = 5;
-    CookRecipeData recipe_data = 7;
+    uint32 qte_quality = 5;         // QTE的结果
+    CookRecipeData recipe_data = 7; // 食谱数据
 }
 
+// 乱炖
 message PlayerRandomCookReq {
     enum CmdId {
         option allow_alias = true;
@@ -555,8 +576,9 @@ message PlayerRandomCookRsp {
     int32 retcode = 4;
 }
 
+// 烹饪全部数据
 message CookRecipeData {
-    uint32 proficiency = 13;
+    uint32 proficiency = 13; // 熟练度
     uint32 recipe_id = 9;
 }
 
@@ -569,10 +591,11 @@ message CookDataNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    repeated CookRecipeData recipe_data_list = 2;
-    uint32 grade = 11;
+    repeated CookRecipeData recipe_data_list = 2; // 全部的食谱数据,包括默认解锁的食谱id
+    uint32 grade = 11;                            // 段位
 }
 
+// 食谱数据变更
 message CookRecipeDataNotify {
     enum CmdId {
         option allow_alias = true;
@@ -582,9 +605,10 @@ message CookRecipeDataNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    CookRecipeData recipe_data = 4;
+    CookRecipeData recipe_data = 4; // 变更的食谱数据
 }
 
+// 烹饪段位同步
 message CookGradeDataNotify {
     enum CmdId {
         option allow_alias = true;
@@ -597,6 +621,7 @@ message CookGradeDataNotify {
     uint32 grade = 12;
 }
 
+// 材料合成
 message PlayerCompoundMaterialReq {
     enum CmdId {
         option allow_alias = true;
@@ -607,15 +632,16 @@ message PlayerCompoundMaterialReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 count = 11;
+    uint32 count = 11; // 合成数量
     uint32 compound_id = 3;
 }
 
+// 合成生产线数据
 message CompoundQueueData {
-    uint32 output_count = 1;
+    uint32 output_count = 1; // 已经完成的数量
     uint32 compound_id = 4;
-    uint32 output_time = 14;
-    uint32 wait_count = 8;
+    uint32 output_time = 14; // 下一个完成合成的时间
+    uint32 wait_count = 8;   // 等待合成的数量
 }
 
 message PlayerCompoundMaterialRsp {
@@ -631,6 +657,7 @@ message PlayerCompoundMaterialRsp {
     int32 retcode = 12;
 }
 
+// 领取合成结果
 message TakeCompoundOutputReq {
     enum CmdId {
         option allow_alias = true;
@@ -658,6 +685,7 @@ message TakeCompoundOutputRsp {
     int32 retcode = 2;
 }
 
+// 合成组件的全部数据
 message CompoundDataNotify {
     enum CmdId {
         option allow_alias = true;
@@ -667,10 +695,11 @@ message CompoundDataNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    repeated uint32 unlock_compound_list = 1;
+    repeated uint32 unlock_compound_list = 1; // 包括默认解锁的合成id
     repeated CompoundQueueData compound_que_data_list = 9;
 }
 
+// 客户端主动拉取合成数据
 message GetCompoundDataReq {
     enum CmdId {
         option allow_alias = true;
@@ -692,10 +721,11 @@ message GetCompoundDataRsp {
     }
 
     int32 retcode = 3;
-    repeated uint32 unlock_compound_list = 11;
+    repeated uint32 unlock_compound_list = 11; // 包括默认解锁的合成id
     repeated CompoundQueueData compound_que_data_list = 7;
 }
 
+// 玩家个人时间同步
 message PlayerTimeNotify {
     enum CmdId {
         option allow_alias = true;
@@ -705,11 +735,12 @@ message PlayerTimeNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint64 server_time = 5;
-    uint64 player_time = 11;
+    uint64 server_time = 5;  // 服务器时间(1970.1.1开始的毫秒数)
+    uint64 player_time = 11; // 玩家个人时间
     bool is_paused = 14;
 }
 
+// 玩家暂停请求
 message PlayerSetPauseReq {
     enum CmdId {
         option allow_alias = true;
@@ -723,6 +754,7 @@ message PlayerSetPauseReq {
     bool is_paused = 1;
 }
 
+// 玩家暂停响应
 message PlayerSetPauseRsp {
     enum CmdId {
         option allow_alias = true;
@@ -777,21 +809,22 @@ message DataResVersionNotify {
 
     string client_silence_md5 = 10;
     string client_silence_version_suffix = 15;
-    ResVersionConfig res_version_config = 9;
+    ResVersionConfig res_version_config = 9; // TODO...删除res_version/res_md5/is_res_need_relogin
     bool is_data_need_relogin = 7;
     DataResVersionOpType op_type = 12;
-    uint32 client_data_version = 2;
+    uint32 client_data_version = 2;          // 客户端非静默数值版本
     string client_version_suffix = 5;
-    uint32 client_silence_data_version = 1;
+    uint32 client_silence_data_version = 1;  // 客户端静默数值版本
+    // uint32 res_version_ex = 4;              // 小包资源版本号
     string client_md5 = 14;
 }
 
 message DailyTaskInfo {
-    uint32 reward_id = 3;
-    uint32 progress = 13;
-    uint32 finish_progress = 10;
+    uint32 reward_id = 3;        // 客户端展示用的reward_id
+    uint32 progress = 13;        // 当前进度
+    uint32 finish_progress = 10; // 完成需要的进度
     uint32 daily_task_id = 4;
-    bool is_finished = 14;
+    bool is_finished = 14;       // 是否完成
 }
 
 message DailyTaskDataNotify {
@@ -803,9 +836,11 @@ message DailyTaskDataNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 score_reward_id = 11;
-    uint32 finished_num = 4;
-    bool is_taken_score_reward = 9;
+    // repeated DailyTaskInfo task_list = 1;   // 今天的事件列表
+    // repeated uint32 finished_task_list = 2; // 已经完成的事件列表
+    uint32 score_reward_id = 11;    // 积分奖励
+    uint32 finished_num = 4;        // 完成次数
+    bool is_taken_score_reward = 9; // 是否领取了积分奖励
 }
 
 message DailyTaskProgressNotify {
@@ -820,6 +855,7 @@ message DailyTaskProgressNotify {
     DailyTaskInfo info = 12;
 }
 
+// 积分奖励的通知
 message DailyTaskScoreRewardNotify {
     enum CmdId {
         option allow_alias = true;
@@ -832,6 +868,7 @@ message DailyTaskScoreRewardNotify {
     uint32 reward_id = 14;
 }
 
+// 主机同步给客机的固定事件
 message WorldOwnerDailyTaskNotify {
     enum CmdId {
         option allow_alias = true;
@@ -842,11 +879,12 @@ message WorldOwnerDailyTaskNotify {
         IS_ALLOW_CLIENT = 1;
     }
 
-    repeated DailyTaskInfo task_list = 1;
+    repeated DailyTaskInfo task_list = 1; // 主机事件列表
     uint32 finished_daily_task_num = 5;
     uint32 filter_city_id = 2;
 }
 
+// 通知客户端增加一个随机事件
 message AddRandTaskInfoNotify {
     enum CmdId {
         option allow_alias = true;
@@ -860,12 +898,13 @@ message AddRandTaskInfoNotify {
     Vector pos = 13;
 }
 
+// 通知客户端移除一个随机事件
 message RemoveRandTaskInfoNotify {
     enum FinishReason {
         DEFAULT = 0;
-        CLEAR = 1;
-        DISTANCE = 2;
-        FINISH = 3;
+        CLEAR = 1;    // GM指令清理
+        DISTANCE = 2; // 远距离销毁
+        FINISH = 3;   // 玩家完成
     }
 
     enum CmdId {
@@ -881,6 +920,7 @@ message RemoveRandTaskInfoNotify {
     uint32 rand_task_id = 13;
 }
 
+// 领取等级奖励
 message TakePlayerLevelRewardReq {
     enum CmdId {
         option allow_alias = true;
@@ -920,6 +960,7 @@ message PlayerLevelRewardUpdateNotify {
     repeated uint32 level_list = 9;
 }
 
+// 道具交付记录
 message GivingRecord {
     bool is_finished = 9;
     uint32 group_id = 5;
@@ -930,6 +971,7 @@ message GivingRecord {
     map<uint32, uint32> material_cnt_map = 15;
 }
 
+// 登录时通知所有交付记录
 message GivingRecordNotify {
     enum CmdId {
         option allow_alias = true;
@@ -942,6 +984,7 @@ message GivingRecordNotify {
     repeated GivingRecord giving_record_list = 14;
 }
 
+// 交付记录变化通知
 message GivingRecordChangeNotify {
     enum CmdId {
         option allow_alias = true;
@@ -955,6 +998,7 @@ message GivingRecordChangeNotify {
     GivingRecord giving_record = 15;
 }
 
+// 请求交付道具
 message ItemGivingReq {
     enum CmdId {
         option allow_alias = true;
@@ -990,6 +1034,7 @@ message ItemGivingRsp {
     int32 retcode = 3;
 }
 
+// 烹饪开始时请求相关参数
 message PlayerCookArgsReq {
     enum CmdId {
         option allow_alias = true;
@@ -1000,8 +1045,8 @@ message PlayerCookArgsReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 assist_avatar = 10;
-    uint32 recipe_id = 11;
+    uint32 assist_avatar = 10; // 辅助avatar
+    uint32 recipe_id = 11;     // 食谱ID
 }
 
 message PlayerCookArgsRsp {
@@ -1014,9 +1059,10 @@ message PlayerCookArgsRsp {
     }
 
     int32 retcode = 4;
-    float qte_range_ratio = 12;
+    float qte_range_ratio = 12; // QTE完美玩法增加系数：生效的得意技能加的最大值
 }
 
+// 通知客户端执行luashell G --> C
 message PlayerLuaShellNotify {
     enum CmdId {
         option allow_alias = true;
@@ -1027,8 +1073,8 @@ message PlayerLuaShellNotify {
     }
 
     LuaShellType shell_type = 7;
-    uint32 id = 5;
-    bytes lua_shell = 12;
+    uint32 id = 5;        // 对应添加到数据库里面的id 唯一标识
+    bytes lua_shell = 12; // lua 内容
     uint32 use_type = 10;
 }
 
@@ -1041,7 +1087,7 @@ message ServerDisconnectClientNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 data = 10;
+    uint32 data = 10; // ENetReason
 }
 
 message AntiAddictNotify {

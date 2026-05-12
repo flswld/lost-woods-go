@@ -18,6 +18,15 @@ import (
 	"github.com/flswld/halo/logger"
 )
 
+// multi 服启动入口
+//
+// multi 是反作弊 + 寻路服 主要职责：
+//   1. 反作弊：被动监听 GS 广播的玩家行为 检测瞬移/超速/连发
+//   2. 寻路：怪物 AI 的 NavMesh 寻路计算（QueryPathReq）
+//   3. 障碍物：动态障碍物 carving（当前未启用）
+//
+// 启动流程：注册到 Node → 加载 gdconf（NavMesh 数据）→ 启动 handle 进入工作
+
 var APPID string
 var APPVERSION string
 

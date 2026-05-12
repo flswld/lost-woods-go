@@ -10,9 +10,22 @@ import (
 	"github.com/nats-io/nats.go/encoders/protobuf"
 )
 
-// natsrpc客户端
+// natsrpc 客户端封装 - 项目目前仅有 2 个 RPC 服务
+//
+// 与 mq.MessageQueue 的区别：
+//   - MQ：异步广播 + 转发（数据平面/控制平面）
+//   - natsrpc：同步 RPC（请求-响应模式 等结果返回）
+//
+// 当前 RPC 接口：
+//   - DiscoveryClient: 调 Node 的 DiscoveryService（注册 / 心跳 / 服务发现 / UID 分配）
+//   - GMClient: 调 GS 的 GMService（GM 后台 → GS 执行命令 同步等结果）
+//
+// 接口定义在 .proto 文件中 用 protoc-gen-natsrpc 生成存根代码
+//   - node/api/api.natsrpc.pb.go ← node/api/api.proto
+//   - gs/api/api.natsrpc.pb.go ← gs/api/api.proto
 
-// DiscoveryClient node的discovery服务
+// DiscoveryClient Node 服务发现 RPC 客户端（每个服务都需要持有）
+// 嵌入 nodeapi.DiscoveryNATSRPCClient 直接获得所有 RPC 方法
 type DiscoveryClient struct {
 	nodeapi.DiscoveryNATSRPCClient
 }
@@ -43,7 +56,12 @@ func newDiscoveryClient(conn *nats.Conn) (*DiscoveryClient, error) {
 	}, nil
 }
 
-// GMClient gs的gm服务
+// GMClient GS GM 服务 RPC 客户端
+//
+// 用于 GM 后台向特定 GS 同步发送 GM 命令并等结果（10 秒超时）
+// 通过 natsrpc.WithClientID(gsId) 路由到指定 GS 实例（按 GsId 1~MaxGsId）
+//
+// gm/controller/gm_controller.go 缓存 GMClient 实例避免每次重建连接
 type GMClient struct {
 	gsapi.GMNATSRPCClient
 }

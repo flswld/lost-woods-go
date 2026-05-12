@@ -1,3 +1,18 @@
+// 结构体反射工具集
+//
+// 主要用途：动态读写 PB 对象字段（不需要为每个 PB 类型写 setter/getter）
+//
+// 项目用例（gs/game/game.go）：
+//   - SendError: 通过 SetStructFieldValue("Retcode", code) 给任意 Rsp 设置错误码
+//     · 不需要 type switch 或 type assertion
+//     · 通用 SendError(cmdId, player, rsp, retCode) 适用所有 Rsp 类型
+//
+// 提供：
+//   - ConvStructToMap: 结构体 → map[string]any（字段名 → 值）
+//   - GetStructFieldValue: 按字段名取值
+//   - SetStructFieldValue: 按字段名设值
+//   - CopyStructField: 字段间拷贝（src.field → dst.field）
+
 package reflection
 
 import (

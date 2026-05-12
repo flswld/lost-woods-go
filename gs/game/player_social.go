@@ -17,8 +17,32 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
+// 社交 模块（好友/名片/资料/黑名单）
+//
+// 数据存储：所有社交数据都在 dbSocial（gs/model/db_player_social.go）：
+//   - FriendList: 好友 uid 集合
+//   - FriendApplyList: 待处理的好友申请
+//   - BlackList: 黑名单 uid 集合
+//   - NameCardList: 已解锁的名片 ID 列表
+//   - Birthday: 生日（一旦设置不可改）
+//
+// 主要请求：
+//   - 个人资料：SetPlayerName/SetPlayerSignature/SetPlayerHeadImage/SetPlayerBirthday
+//   - 好友管理：AskAddFriend/DealAddFriend/GetPlayerFriendList/GetPlayerAskFriendList
+//   - 黑名单：GetPlayerBlacklist
+//   - 名片：SetNameCard/GetAllUnlockNameCard
+//   - 在线信息：GetOnlinePlayerList/GetOnlinePlayerInfo
+//
+// 跨服好友：所有跨服信息走 USER_MANAGER.LoadGlobalPlayer 临时加载离线/远程玩家档
+// 跨服好友申请：MQ 走 ServerAddFriendNotify 转发到目标 GS
+//
+// **特殊机制**：GetPlayerFriendList 自动加入"小可爱"AI 玩家（COMMAND_MANAGER.system）
+//   不修改用户档 而是查询时动态注入 AI 好友 → 玩家通过私聊 AI 发 GM 命令
+
 /************************************************** 接口请求 **************************************************/
 
+// GetPlayerSocialDetailReq 获取目标玩家社交资料请求（点头像查看资料卡）
+// 走 LoadGlobalPlayer 跨服加载玩家档（在线/离线/远程都能查到）
 func (g *Game) GetPlayerSocialDetailReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.GetPlayerSocialDetailReq)
 	targetUid := req.Uid
@@ -88,6 +112,13 @@ func (g *Game) SetPlayerSignatureReq(player *model.Player, payloadMsg pb.Message
 	g.SendMsg(cmd.SetPlayerSignatureRsp, player.PlayerId, player.ClientSeq, setPlayerSignatureRsp)
 }
 
+// SetPlayerNameReq 设置玩家昵称请求
+//
+// 校验规则（与官服一致）：
+//   - 不为空
+//   - UTF-8 字符串
+//   - 长度 ≤ 14（按 rune 计 中文 14 个汉字）
+//   - 数字数量 ≤ 6（防止全数字纯数字昵称）
 func (g *Game) SetPlayerNameReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.SetPlayerNameReq)
 	nickName := req.NickName
@@ -132,6 +163,14 @@ func (g *Game) GetAllUnlockNameCardReq(player *model.Player, payloadMsg pb.Messa
 	g.SendMsg(cmd.GetAllUnlockNameCardRsp, player.PlayerId, player.ClientSeq, &proto.GetAllUnlockNameCardRsp{NameCardList: dbSocial.NameCardList})
 }
 
+// GetPlayerFriendListReq 获取好友列表请求
+//
+// 流程：
+//  1. 遍历 dbSocial.FriendList 每个 uid 调 LoadGlobalPlayer 取在线/离线状态
+//  2. 自动追加 COMMAND_MANAGER.system（AI"小可爱"机器人）作为永久好友
+//     · 用动态注入而非写入存档 不污染玩家好友数据
+//     · 玩家通过私聊"小可爱"发 GM 命令（详见 CLAUDE.md "AI 世界" GM 机器人好友）
+//  3. Param 字段：上次活跃距今多少天（前端用于显示"3天前在线"）
 func (g *Game) GetPlayerFriendListReq(player *model.Player, payloadMsg pb.Message) {
 	getPlayerFriendListRsp := &proto.GetPlayerFriendListRsp{
 		FriendList: make([]*proto.FriendBrief, 0),
@@ -150,6 +189,7 @@ func (g *Game) GetPlayerFriendListReq(player *model.Player, payloadMsg pb.Messag
 		} else {
 			onlineState = proto.FriendOnlineState_FREIEND_DISCONNECT
 		}
+		lastActive, daysAgo := friendActiveInfo(friendPlayer, online)
 		friendBrief := &proto.FriendBrief{
 			Uid:               friendPlayer.PlayerId,
 			Nickname:          friendPlayer.NickName,
@@ -159,9 +199,9 @@ func (g *Game) GetPlayerFriendListReq(player *model.Player, payloadMsg pb.Messag
 			Signature:         friendPlayer.Signature,
 			OnlineState:       onlineState,
 			IsMpModeAvailable: true,
-			LastActiveTime:    player.OfflineTime,
+			LastActiveTime:    lastActive,
 			NameCardId:        friendPlayer.GetDbSocial().NameCard,
-			Param:             (uint32(time.Now().Unix()) - player.OfflineTime) / 3600 / 24,
+			Param:             daysAgo,
 			IsGameSource:      true,
 			PlatformType:      proto.PlatformType_PC,
 		}
@@ -195,6 +235,7 @@ func (g *Game) GetPlayerAskFriendListReq(player *model.Player, payloadMsg pb.Mes
 		} else {
 			onlineState = proto.FriendOnlineState_FREIEND_DISCONNECT
 		}
+		lastActive, daysAgo := friendActiveInfo(friendPlayer, online)
 		friendBrief := &proto.FriendBrief{
 			Uid:               friendPlayer.PlayerId,
 			Nickname:          friendPlayer.NickName,
@@ -204,9 +245,9 @@ func (g *Game) GetPlayerAskFriendListReq(player *model.Player, payloadMsg pb.Mes
 			Signature:         friendPlayer.Signature,
 			OnlineState:       onlineState,
 			IsMpModeAvailable: true,
-			LastActiveTime:    player.OfflineTime,
+			LastActiveTime:    lastActive,
 			NameCardId:        friendPlayer.GetDbSocial().NameCard,
-			Param:             (uint32(time.Now().Unix()) - player.OfflineTime) / 3600 / 24,
+			Param:             daysAgo,
 			IsGameSource:      true,
 			PlatformType:      proto.PlatformType_PC,
 		}
@@ -215,6 +256,14 @@ func (g *Game) GetPlayerAskFriendListReq(player *model.Player, payloadMsg pb.Mes
 	g.SendMsg(cmd.GetPlayerAskFriendListRsp, player.PlayerId, player.ClientSeq, getPlayerAskFriendListRsp)
 }
 
+// AskAddFriendReq 申请添加好友请求
+//
+// 三种情况：
+//  1. 目标在本 GS：直接给目标 dbSocial 加 FriendApply + 在线通知 AskAddFriendNotify
+//  2. 目标在远程 GS（在线）：MQ 发 ServerAddFriendNotify 转发到目标 GS
+//  3. 目标全服离线：调 LoadTempOfflineUser(lock=true) 临时加载档 → 改 dbSocial → SaveTempOfflineUser
+//     · lock=true 必传 因为修改场景必须分布式锁
+//     · 函数返回前必须 SaveTempOfflineUser 释放锁 否则锁泄露
 func (g *Game) AskAddFriendReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.AskAddFriendReq)
 	targetUid := req.TargetUid
@@ -281,6 +330,8 @@ func (g *Game) AskAddFriendReq(player *model.Player, payloadMsg pb.Message) {
 	askAddFriendNotify := &proto.AskAddFriendNotify{
 		TargetUid: player.PlayerId,
 	}
+	// 申请方自己肯定在线 用 now 作为 LastActiveTime, days=0
+	lastActive, daysAgo := friendActiveInfo(player, true)
 	askAddFriendNotify.TargetFriendBrief = &proto.FriendBrief{
 		Uid:               player.PlayerId,
 		Nickname:          player.NickName,
@@ -290,9 +341,9 @@ func (g *Game) AskAddFriendReq(player *model.Player, payloadMsg pb.Message) {
 		Signature:         player.Signature,
 		OnlineState:       proto.FriendOnlineState_FRIEND_ONLINE,
 		IsMpModeAvailable: true,
-		LastActiveTime:    player.OfflineTime,
+		LastActiveTime:    lastActive,
 		NameCardId:        player.GetDbSocial().NameCard,
-		Param:             (uint32(time.Now().Unix()) - player.OfflineTime) / 3600 / 24,
+		Param:             daysAgo,
 		IsGameSource:      true,
 		PlatformType:      proto.PlatformType_PC,
 	}
@@ -361,6 +412,15 @@ func (g *Game) DealAddFriendReq(player *model.Player, payloadMsg pb.Message) {
 	}
 }
 
+// GetOnlinePlayerListReq 获取在线玩家列表请求（最多 50 人）
+//
+// 处理：
+//  1. 先列所有 GS 的 AI 玩家（PUBG 房间）显示为"房间：N"+开局时间
+//     · 玩家可以从这里看到本服 6 个房间（按 GS 编号）+ 跨服 AI 玩家
+//  2. 本 GS 在线玩家（跳过自己 + AI）
+//  3. 不够 50 时从远程 GS 补足
+//
+// 用于多人世界匹配/加好友的"看看在线谁"界面
 func (g *Game) GetOnlinePlayerListReq(player *model.Player, payloadMsg pb.Message) {
 	count := 0
 	rsp := &proto.GetOnlinePlayerListRsp{
@@ -443,6 +503,8 @@ func (g *Game) GetOnlinePlayerInfoReq(player *model.Player, payloadMsg pb.Messag
 	})
 }
 
+// GetPlayerBlacklistReq 获取黑名单请求（**未实现** 直接返回空响应）
+// 数据结构在 dbSocial.BlackList 但黑名单功能从未被加入到逻辑中
 func (g *Game) GetPlayerBlacklistReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.GetPlayerBlacklistReq)
 	_ = req
@@ -453,6 +515,13 @@ func (g *Game) GetPlayerBlacklistReq(player *model.Player, payloadMsg pb.Message
 
 // 跨服添加好友通知
 
+// ServerAddFriendNotify 跨服好友相关消息处理（接收来自其他 GS 的 MQ 消息）
+//
+// 两种 OriginInfo.CmdName：
+//   - "AskAddFriendReq": 跨服申请加好友 → 写本 GS 在线玩家的 dbSocial.FriendApply + 弹通知
+//   - "DealAddFriendReq": 跨服处理好友申请的同意结果 → 把申请方加入本 GS 玩家的 FriendList
+//
+// 与同 GS 的处理逻辑等价 仅多了 MQ 转发这一层
 func (g *Game) ServerAddFriendNotify(addFriendInfo *mq.AddFriendInfo) {
 	switch addFriendInfo.OriginInfo.CmdName {
 	case "AskAddFriendReq":
@@ -521,4 +590,17 @@ func (g *Game) PacketOnlinePlayerInfo(player *model.Player) *proto.OnlinePlayerI
 		CurPlayerNumInWorld: worldPlayerNum,
 	}
 	return onlinePlayerInfo
+}
+
+// friendActiveInfo 计算 FriendBrief 的 LastActiveTime 与 Param（"上次活跃距今多少天"）
+// 在线时返回 (now, 0)；离线且有 OfflineTime 记录时返回 (OfflineTime, 距今天数)；都没有则 (0, 0)
+func friendActiveInfo(friendPlayer *model.Player, online bool) (lastActive uint32, daysAgo uint32) {
+	now := uint32(time.Now().Unix())
+	if online {
+		return now, 0
+	}
+	if friendPlayer.OfflineTime == 0 {
+		return 0, 0
+	}
+	return friendPlayer.OfflineTime, (now - friendPlayer.OfflineTime) / 86400
 }

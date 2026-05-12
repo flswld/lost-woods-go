@@ -12,9 +12,37 @@ import (
 	"github.com/flswld/halo/logger"
 )
 
-// 玩家游戏内GM命令格式解析模块
+// 玩家游戏内 GM 命令实现集合（聊天命令）
+//
+// 本文件包含 25 个 GM 命令的具体实现 全部走 PlayerChatGM 入口
+// 玩家私聊"小可爱" → 命令文本（如"give 1234 5"）解析 → 调对应的 XxxCommand 函数
+//
+// 已实现的命令（按 InitController 注册顺序）：
+//   - assign: 指定 GM 命令的目标玩家（"@玩家 命令" 模式）
+//   - help: 命令帮助文档（普通玩家也能用）
+//   - wudi/energy/stamina/nocd: 无敌 / 无限能量 / 无限体力 / 无技能CD（开关）
+//   - goto/jump: 传送（按场景id+坐标 / 按传送点id）
+//   - avatar/equip: 添加角色 / 装备
+//   - item: 添加物品（含原石/摩拉/树脂等虚拟物品）
+//   - kill/monster/gadget: 杀实体 / 刷怪 / 刷物件
+//   - quest: 接/完成/跳过任务
+//   - point/area: 解锁传送点 / 区域
+//   - weather: 设置天气
+//   - openstate: 设置游戏功能开放状态（解锁角色卡池/秘境/活动等）
+//   - talent: 解锁角色命之座
+//   - player/level/break: 玩家信息 / 等级 / 突破
+//   - clear: 清档（删档重练）
+//   - debug: 调试命令（开发用）
 
-// CommandController 命令控制器
+// CommandController 命令控制器（每个命令一个）
+//
+// 字段：
+//   - Name: 命令中文名（如"无敌"）
+//   - AliasList: 命令别名列表（如["wudi"]）多个别名都能调起
+//   - Description: 帮助信息描述（带颜色标签）
+//   - UsageList: 用法示例列表（{alias} 占位符运行时替换为实际命令名）
+//   - Perm: 权限要求（CommandPermNormal / CommandPermGM）
+//   - Func: 实际命令实现函数
 type CommandController struct {
 	Name        string      // 名称
 	AliasList   []string    // 别名列表
@@ -46,6 +74,10 @@ func (c *CommandManager) InitController() {
 		c.NewAreaCommandController(),
 		c.NewWeatherCommandController(),
 		c.NewOpenStateCommandController(),
+		c.NewTalentCommandController(),
+		c.NewPlayerCommandController(),
+		c.NewLevelCommandController(),
+		c.NewBreakCommandController(),
 		c.NewClearCommandController(),
 		c.NewDebugCommandController(),
 	}
@@ -70,8 +102,8 @@ func (c *CommandManager) NewAssignCommandController() *CommandController {
 func (c *CommandManager) AssignCommand(content *CommandContent) bool {
 	var assignUid uint32
 
-	return content.Dynamic("uint32", func(param any) bool {
-		value := param.(uint32)
+	return content.Must("uint32", func(p any) bool {
+		value := p.(uint32)
 		// 指定uid
 		assignUid = value
 		return true
@@ -106,8 +138,8 @@ func (c *CommandManager) HelpCommand(content *CommandContent) bool {
 	var alias string                  // 别名
 	var controller *CommandController // 命令控制器
 
-	return content.Option("string", func(param any) bool {
-		value := param.(string)
+	return content.Option("string", func(p any) bool {
+		value := p.(string)
 		// 数字的话就是页面
 		parseUint, err := strconv.ParseUint(value, 10, 32)
 		if err == nil {
@@ -206,28 +238,25 @@ func (c *CommandManager) NewWudiCommandController() *CommandController {
 }
 
 func (c *CommandManager) WudiCommand(content *CommandContent) bool {
-	var mode1 string  // 模式
-	var mode2 string  // 模式
-	var param1 string // 参数
+	var mode1 string // 模式1
+	var mode2 string // 模式2
+	var param string // 参数
 
-	return content.Dynamic("string", func(param any) bool {
-		// 模式
-		mode1 = param.(string)
+	return content.Must("string", func(p any) bool {
+		mode1 = p.(string)
 		return true
-	}).Dynamic("string", func(param any) bool {
-		// 模式
-		mode2 = param.(string)
+	}).Must("string", func(p any) bool {
+		mode2 = p.(string)
 		return true
-	}).Option("string", func(param any) bool {
-		// 参数1
-		param1 = param.(string)
+	}).Must("string", func(p any) bool {
+		param = p.(string)
 		return true
 	}).Execute(func() bool {
 		switch mode1 {
 		case "global":
 			switch mode2 {
 			case "avatar":
-				switch param1 {
+				switch param {
 				case "on":
 					c.gmCmd.GMSetPlayerWuDi(content.AssignPlayer.PlayerId, true)
 					content.SendSuccMessage(content.Executor, "已开启玩家无敌，指定UID：%v。", content.AssignPlayer.PlayerId)
@@ -240,7 +269,7 @@ func (c *CommandManager) WudiCommand(content *CommandContent) bool {
 					return false
 				}
 			case "monster":
-				switch param1 {
+				switch param {
 				case "on":
 					c.gmCmd.GMSetMonsterWudi(content.AssignPlayer.PlayerId, true)
 					content.SendSuccMessage(content.Executor, "已开启怪物无敌，指定UID：%v。", content.AssignPlayer.PlayerId)
@@ -277,21 +306,19 @@ func (c *CommandManager) NewEnergyCommandController() *CommandController {
 }
 
 func (c *CommandManager) EnergyCommand(content *CommandContent) bool {
-	var mode1 string  // 模式
-	var param1 string // 参数
+	var mode string  // 模式
+	var param string // 参数
 
-	return content.Dynamic("string", func(param any) bool {
-		// 模式
-		mode1 = param.(string)
+	return content.Must("string", func(p any) bool {
+		mode = p.(string)
 		return true
-	}).Option("string", func(param any) bool {
-		// 参数1
-		param1 = param.(string)
+	}).Must("string", func(p any) bool {
+		param = p.(string)
 		return true
 	}).Execute(func() bool {
-		switch mode1 {
+		switch mode {
 		case "infinite":
-			switch param1 {
+			switch param {
 			case "on":
 				c.gmCmd.GMSetPlayerEnergyInf(content.AssignPlayer.PlayerId, true)
 				content.SendSuccMessage(content.Executor, "已开启无限元素爆发，指定UID：%v。", content.AssignPlayer.PlayerId)
@@ -325,21 +352,19 @@ func (c *CommandManager) NewStaminaCommandController() *CommandController {
 }
 
 func (c *CommandManager) StaminaCommand(content *CommandContent) bool {
-	var mode1 string  // 模式
-	var param1 string // 参数
+	var mode string  // 模式
+	var param string // 参数
 
-	return content.Dynamic("string", func(param any) bool {
-		// 模式
-		mode1 = param.(string)
+	return content.Must("string", func(p any) bool {
+		mode = p.(string)
 		return true
-	}).Option("string", func(param any) bool {
-		// 参数1
-		param1 = param.(string)
+	}).Must("string", func(p any) bool {
+		param = p.(string)
 		return true
 	}).Execute(func() bool {
-		switch mode1 {
+		switch mode {
 		case "infinite":
-			switch param1 {
+			switch param {
 			case "on":
 				c.gmCmd.GMSetPlayerStaminaInf(content.AssignPlayer.PlayerId, true)
 				content.SendSuccMessage(content.Executor, "已开启无限耐力，指定UID：%v。", content.AssignPlayer.PlayerId)
@@ -373,14 +398,13 @@ func (c *CommandManager) NewNoCdCommandController() *CommandController {
 }
 
 func (c *CommandManager) NoCdCommand(content *CommandContent) bool {
-	var param1 string // 参数
+	var param string // 参数
 
-	return content.Option("string", func(param any) bool {
-		// 参数1
-		param1 = param.(string)
+	return content.Must("string", func(p any) bool {
+		param = p.(string)
 		return true
 	}).Execute(func() bool {
-		switch param1 {
+		switch param {
 		case "on":
 			c.gmCmd.GMSetPlayerNoCd(content.AssignPlayer.PlayerId, true)
 			content.SendSuccMessage(content.Executor, "已开启无冷却，指定UID：%v。", content.AssignPlayer.PlayerId)
@@ -438,21 +462,21 @@ func (c *CommandManager) GotoCommand(content *CommandContent) bool {
 
 	// 解析命令
 	playerPos := GAME.GetPlayerPos(content.AssignPlayer)
-	return content.Dynamic("string", func(param any) bool {
+	return content.Must("string", func(p any) bool {
 		// 坐标x
-		value := param.(string)
+		value := p.(string)
 		pos, ok := parseRelativePosFunc(value, playerPos.X)
 		posX = pos
 		return ok
-	}).Dynamic("string", func(param any) bool {
+	}).Must("string", func(p any) bool {
 		// 坐标y
-		value := param.(string)
+		value := p.(string)
 		pos, ok := parseRelativePosFunc(value, playerPos.Y)
 		posY = pos
 		return ok
-	}).Dynamic("string", func(param any) bool {
+	}).Must("string", func(p any) bool {
 		// 坐标z
-		value := param.(string)
+		value := p.(string)
 		pos, ok := parseRelativePosFunc(value, playerPos.Z)
 		posZ = pos
 		return ok
@@ -483,9 +507,8 @@ func (c *CommandManager) NewJumpCommandController() *CommandController {
 func (c *CommandManager) JumpCommand(content *CommandContent) bool {
 	var sceneId uint32 // 场景id
 
-	return content.Dynamic("uint32", func(param any) bool {
-		// 场景id
-		sceneId = param.(uint32)
+	return content.Must("uint32", func(p any) bool {
+		sceneId = p.(uint32)
 		return true
 	}).Execute(func() bool {
 		var posX float64
@@ -517,7 +540,7 @@ func (c *CommandManager) NewAvatarCommandController() *CommandController {
 		AliasList:   []string{"avatar"},
 		Description: "<color=#FFFFCC>{alias}</color> <color=#FFCC99>角色</color>",
 		UsageList: []string{
-			"{alias} add <角色ID/all>",
+			"{alias} <add/del> <角色ID/all>",
 		},
 		Perm: CommandPermNormal,
 		Func: c.AvatarCommand,
@@ -525,34 +548,47 @@ func (c *CommandManager) NewAvatarCommandController() *CommandController {
 }
 
 func (c *CommandManager) AvatarCommand(content *CommandContent) bool {
-	var mode string   // 模式
-	var param1 string // 参数1
+	var mode string  // 模式
+	var param string // 参数
 
-	return content.Dynamic("string", func(param any) bool {
-		// 模式
-		mode = param.(string)
+	return content.Must("string", func(p any) bool {
+		mode = p.(string)
 		return true
-	}).Dynamic("string", func(param any) bool {
-		// 参数1
-		param1 = param.(string)
+	}).Must("string", func(p any) bool {
+		param = p.(string)
 		return true
 	}).Execute(func() bool {
 		switch mode {
 		case "add":
 			// 添加角色
 			// 判断是否要添加全部角色
-			if param1 == "all" {
+			if param == "all" {
 				c.gmCmd.GMAddAllAvatar(content.AssignPlayer.PlayerId, 1, 0)
 				content.SendSuccMessage(content.Executor, "已添加所有角色，指定UID：%v。", content.AssignPlayer.PlayerId)
 				return true
 			}
 			// 角色id
-			avatarId, err := strconv.ParseUint(param1, 10, 32)
+			avatarId, err := strconv.ParseUint(param, 10, 32)
 			if err != nil {
 				return false
 			}
 			c.gmCmd.GMAddAvatar(content.AssignPlayer.PlayerId, uint32(avatarId), 1, 0)
 			content.SendSuccMessage(content.Executor, "已添加角色，指定UID：%v，角色ID：%v。", content.AssignPlayer.PlayerId, avatarId)
+		case "del":
+			// 删除角色
+			// 判断是否要删除全部角色
+			if param == "all" {
+				c.gmCmd.GMDelAllAvatar(content.AssignPlayer.PlayerId)
+				content.SendSuccMessage(content.Executor, "已删除所有角色，指定UID：%v。", content.AssignPlayer.PlayerId)
+				return true
+			}
+			// 角色id
+			avatarId, err := strconv.ParseUint(param, 10, 32)
+			if err != nil {
+				return false
+			}
+			c.gmCmd.GMDelAvatar(content.AssignPlayer.PlayerId, uint32(avatarId))
+			content.SendSuccMessage(content.Executor, "已删除角色，指定UID：%v，角色ID：%v。", content.AssignPlayer.PlayerId, avatarId)
 		default:
 			return false
 		}
@@ -568,7 +604,10 @@ func (c *CommandManager) NewEquipCommandController() *CommandController {
 		AliasList:   []string{"equip"},
 		Description: "<color=#FFFFCC>{alias}</color> <color=#FFCC99>装备</color>",
 		UsageList: []string{
-			"{alias} add <武器ID/圣遗物ID/all> [等级] [突破] [精炼] 添加武器/圣遗物",
+			"{alias} add all 添加全部武器圣遗物",
+			"{alias} add <武器ID> [等级] [突破] [精炼] 添加武器",
+			"{alias} add <圣遗物ID> [主属性ID] [<副属性ID> <副属性追加次数> ...] 添加圣遗物",
+			"{alias} clear weapon 清除全部武器",
 			"{alias} clear reliquary 清除全部圣遗物",
 		},
 		Perm: CommandPermNormal,
@@ -577,42 +616,32 @@ func (c *CommandManager) NewEquipCommandController() *CommandController {
 }
 
 func (c *CommandManager) EquipCommand(content *CommandContent) bool {
-	var mode string      // 模式
-	var param1 string    // 参数1
-	var level uint8 = 1  // 等级
-	var promote uint8    // 突破
-	var refinement uint8 // 精炼
+	var mode string        // 模式
+	var param string       // 参数
+	var paramList []uint32 // 参数列表
 
-	return content.Dynamic("string", func(param any) bool {
-		// 模式
-		mode = param.(string)
+	return content.Must("string", func(p any) bool {
+		mode = p.(string)
 		return true
-	}).Dynamic("string", func(param any) bool {
-		// 参数1
-		param1 = param.(string)
+	}).Must("string", func(p any) bool {
+		param = p.(string)
 		return true
-	}).Option("uint8", func(param any) bool {
-		// 等级
-		level = param.(uint8)
-		return true
-	}).Option("uint8", func(param any) bool {
-		// 突破
-		promote = param.(uint8)
-		return true
-	}).Option("uint8", func(param any) bool {
-		// 精炼
-		refinement = param.(uint8)
+	}).Array("uint32", func(p any) bool {
+		paramAnyList := p.([]any)
+		for _, paramAny := range paramAnyList {
+			paramList = append(paramList, paramAny.(uint32))
+		}
 		return true
 	}).Execute(func() bool {
 		switch mode {
 		case "add":
-			if param1 == "all" {
-				c.gmCmd.GMAddAllWeapon(content.AssignPlayer.PlayerId, 1, level, promote, refinement)
+			if param == "all" {
+				c.gmCmd.GMAddAllWeapon(content.AssignPlayer.PlayerId, 1, 1, 0, 0)
 				c.gmCmd.GMAddAllReliquary(content.AssignPlayer.PlayerId, 1)
-				content.SendSuccMessage(content.Executor, "已添加所有武器圣遗物，指定UID：%v，等级：%v，突破：%v，精炼：%v。", content.AssignPlayer.PlayerId, level, promote, refinement)
+				content.SendSuccMessage(content.Executor, "已添加所有武器圣遗物，指定UID：%v。", content.AssignPlayer.PlayerId)
 				return true
 			}
-			itemId, err := strconv.ParseUint(param1, 10, 32)
+			itemId, err := strconv.ParseUint(param, 10, 32)
 			if err != nil {
 				return false
 			}
@@ -622,16 +651,52 @@ func (c *CommandManager) EquipCommand(content *CommandContent) bool {
 			}
 			switch itemDataConfig.Type {
 			case constant.ITEM_TYPE_WEAPON:
+				level := uint8(1)
+				promote := uint8(0)
+				refinement := uint8(0)
+				if len(paramList) > 0 {
+					level = uint8(paramList[0])
+				}
+				if len(paramList) > 1 {
+					promote = uint8(paramList[1])
+				}
+				if len(paramList) > 2 {
+					refinement = uint8(paramList[2])
+				}
 				c.gmCmd.GMAddWeapon(content.AssignPlayer.PlayerId, uint32(itemId), 1, level, promote, refinement)
 				content.SendSuccMessage(content.Executor, "已添加武器，指定UID：%v，武器ID：%v，等级：%v，突破：%v，精炼：%v。", content.AssignPlayer.PlayerId, itemId, level, promote, refinement)
 			case constant.ITEM_TYPE_RELIQUARY:
-				c.gmCmd.GMAddReliquary(content.AssignPlayer.PlayerId, uint32(itemId), 1)
+				mainPropId := uint32(0)
+				appendPropIdList := make([]uint32, 0)
+				if len(paramList) > 0 {
+					mainPropId = paramList[0]
+				}
+				if (len(paramList)-1)%2 == 0 {
+					newParamList := paramList[1:]
+					for i := 0; i < len(newParamList); i += 2 {
+						appendPropId := newParamList[i]
+						appendCount := newParamList[i+1]
+						if appendCount > 100 {
+							continue
+						}
+						for j := 0; j < int(appendCount); j++ {
+							appendPropIdList = append(appendPropIdList, appendPropId)
+						}
+					}
+				}
+				if len(appendPropIdList) > 1000 {
+					appendPropIdList = make([]uint32, 0)
+				}
+				c.gmCmd.GMAddReliquary(content.AssignPlayer.PlayerId, uint32(itemId), 1, mainPropId, appendPropIdList)
 				content.SendSuccMessage(content.Executor, "已添加圣遗物，指定UID：%v，圣遗物ID：%v。", content.AssignPlayer.PlayerId, itemId)
 			default:
 				return false
 			}
 		case "clear":
-			switch param1 {
+			switch param {
+			case "weapon":
+				c.gmCmd.GMClearWeapon(content.AssignPlayer.PlayerId)
+				content.SendSuccMessage(content.Executor, "已清除全部武器，指定UID：%v。", content.AssignPlayer.PlayerId)
 			case "reliquary":
 				c.gmCmd.GMClearReliquary(content.AssignPlayer.PlayerId)
 				content.SendSuccMessage(content.Executor, "已清除全部圣遗物，指定UID：%v。", content.AssignPlayer.PlayerId)
@@ -663,30 +728,27 @@ func (c *CommandManager) NewItemCommandController() *CommandController {
 
 func (c *CommandManager) ItemCommand(content *CommandContent) bool {
 	var mode string      // 模式
-	var param1 string    // 参数1
+	var param string     // 参数
 	var count uint32 = 1 // 数量
 
-	return content.Dynamic("string", func(param any) bool {
-		// 模式
-		mode = param.(string)
+	return content.Must("string", func(p any) bool {
+		mode = p.(string)
 		return true
-	}).Dynamic("string", func(param any) bool {
-		// 参数1
-		param1 = param.(string)
+	}).Must("string", func(p any) bool {
+		param = p.(string)
 		return true
-	}).Option("uint32", func(param any) bool {
-		// 数量
-		count = param.(uint32)
+	}).Option("uint32", func(p any) bool {
+		count = p.(uint32)
 		return true
 	}).Execute(func() bool {
 		switch mode {
 		case "add":
-			if param1 == "all" {
+			if param == "all" {
 				c.gmCmd.GMAddAllItem(content.AssignPlayer.PlayerId, count)
 				content.SendSuccMessage(content.Executor, "已添加所有道具，指定UID：%v，数量：%v。", content.AssignPlayer.PlayerId, count)
 				return true
 			}
-			itemId, err := strconv.ParseUint(param1, 10, 32)
+			itemId, err := strconv.ParseUint(param, 10, 32)
 			if err != nil {
 				return false
 			}
@@ -697,12 +759,12 @@ func (c *CommandManager) ItemCommand(content *CommandContent) bool {
 			c.gmCmd.GMAddItem(content.AssignPlayer.PlayerId, uint32(itemId), count)
 			content.SendSuccMessage(content.Executor, "已添加道具，指定UID：%v，道具ID：%v，数量：%v。", content.AssignPlayer.PlayerId, itemId, count)
 		case "clear":
-			if param1 == "all" {
+			if param == "all" {
 				c.gmCmd.GMClearItem(content.AssignPlayer.PlayerId)
 				content.SendSuccMessage(content.Executor, "已清除全部道具，指定UID：%v。", content.AssignPlayer.PlayerId)
 				return true
 			}
-			itemId, err := strconv.ParseUint(param1, 10, 32)
+			itemId, err := strconv.ParseUint(param, 10, 32)
 			if err != nil {
 				return false
 			}
@@ -732,16 +794,14 @@ func (c *CommandManager) NewKillCommandController() *CommandController {
 }
 
 func (c *CommandManager) KillCommand(content *CommandContent) bool {
-	var mode string   // 模式
-	var param1 string // 参数
+	var mode string  // 模式
+	var param string // 参数
 
-	return content.Dynamic("string", func(param any) bool {
-		// 模式
-		mode = param.(string)
+	return content.Must("string", func(p any) bool {
+		mode = p.(string)
 		return true
-	}).Option("string", func(param any) bool {
-		// 参数1
-		param1 = param.(string)
+	}).Option("string", func(p any) bool {
+		param = p.(string)
 		return true
 	}).Execute(func() bool {
 		switch mode {
@@ -751,7 +811,7 @@ func (c *CommandManager) KillCommand(content *CommandContent) bool {
 			content.SendSuccMessage(content.Executor, "已杀死自己，指定UID：%v。", content.AssignPlayer.PlayerId)
 		case "monster":
 			// 杀死怪物
-			switch param1 {
+			switch param {
 			case "":
 				// 怪物的话必须指定目标
 				content.SetElse(func() {
@@ -764,7 +824,7 @@ func (c *CommandManager) KillCommand(content *CommandContent) bool {
 				content.SendSuccMessage(content.Executor, "已杀死所有怪物，指定UID：%v。", content.AssignPlayer.PlayerId)
 			default:
 				// 实体id
-				entityId, err := strconv.ParseUint(param1, 10, 32)
+				entityId, err := strconv.ParseUint(param, 10, 32)
 				if err != nil {
 					return false
 				}
@@ -803,26 +863,26 @@ func (c *CommandManager) MonsterCommand(content *CommandContent) bool {
 	var posY = pos.Y // 坐标y
 	var posZ = pos.Z // 坐标z
 
-	return content.Dynamic("uint32", func(param any) bool {
-		monsterId = param.(uint32)
+	return content.Must("uint32", func(p any) bool {
+		monsterId = p.(uint32)
 		return true
-	}).Option("uint32", func(param any) bool {
-		count = param.(uint32)
+	}).Option("uint32", func(p any) bool {
+		count = p.(uint32)
 		return true
-	}).Option("uint8", func(param any) bool {
-		level = param.(uint8)
+	}).Option("uint8", func(p any) bool {
+		level = p.(uint8)
 		return true
-	}).Option("uint32", func(param any) bool {
-		pose = param.(uint32)
+	}).Option("uint32", func(p any) bool {
+		pose = p.(uint32)
 		return true
-	}).Option("float64", func(param any) bool {
-		posX = param.(float64)
+	}).Option("float64", func(p any) bool {
+		posX = p.(float64)
 		return true
-	}).Option("float64", func(param any) bool {
-		posY = param.(float64)
+	}).Option("float64", func(p any) bool {
+		posY = p.(float64)
 		return true
-	}).Option("float64", func(param any) bool {
-		posZ = param.(float64)
+	}).Option("float64", func(p any) bool {
+		posZ = p.(float64)
 		return true
 	}).Execute(func() bool {
 		_ = pose
@@ -850,11 +910,11 @@ func (c *CommandManager) GadgetCommand(content *CommandContent) bool {
 	var gadgetId uint32  // 物件id
 	var count uint32 = 1 // 数量
 
-	return content.Dynamic("uint32", func(param any) bool {
-		gadgetId = param.(uint32)
+	return content.Must("uint32", func(p any) bool {
+		gadgetId = p.(uint32)
 		return true
-	}).Option("uint32", func(param any) bool {
-		count = param.(uint32)
+	}).Option("uint32", func(p any) bool {
+		count = p.(uint32)
 		return true
 	}).Execute(func() bool {
 		c.gmCmd.GMCreateGadget(content.AssignPlayer.PlayerId, gadgetId, count)
@@ -880,22 +940,20 @@ func (c *CommandManager) NewQuestCommandController() *CommandController {
 }
 
 func (c *CommandManager) QuestCommand(content *CommandContent) bool {
-	var mode string   // 模式
-	var param1 string // 参数1
+	var mode string  // 模式
+	var param string // 参数
 
-	return content.Dynamic("string", func(param any) bool {
-		// 模式
-		mode = param.(string)
+	return content.Must("string", func(p any) bool {
+		mode = p.(string)
 		return true
-	}).Dynamic("string", func(param any) bool {
-		// 参数1
-		param1 = param.(string)
+	}).Must("string", func(p any) bool {
+		param = p.(string)
 		return true
 	}).Execute(func() bool {
 		switch mode {
 		case "add", "accept":
 			// 任务id
-			questId, err := strconv.ParseUint(param1, 10, 32)
+			questId, err := strconv.ParseUint(param, 10, 32)
 			if err != nil {
 				return false
 			}
@@ -905,14 +963,14 @@ func (c *CommandManager) QuestCommand(content *CommandContent) bool {
 			content.SendSuccMessage(content.Executor, "已添加任务，指定UID：%v，任务ID：%v。", content.AssignPlayer.PlayerId, questId)
 		case "finish":
 			// 完成指定任务
-			if param1 == "all" {
+			if param == "all" {
 				// 强制完成当前所有任务
 				c.gmCmd.GMForceFinishAllQuest(content.AssignPlayer.PlayerId)
 				content.SendSuccMessage(content.Executor, "已完成当前全部任务，指定UID：%v。", content.AssignPlayer.PlayerId)
 				return true
 			}
 			// 任务id
-			questId, err := strconv.ParseUint(param1, 10, 32)
+			questId, err := strconv.ParseUint(param, 10, 32)
 			if err != nil {
 				return false
 			}
@@ -945,25 +1003,23 @@ func (c *CommandManager) NewPointCommandController() *CommandController {
 
 func (c *CommandManager) PointCommand(content *CommandContent) bool {
 	var sceneId = content.AssignPlayer.GetSceneId() // 场景id
-	var param1 string                               // 参数1
+	var param string                                // 参数
 
-	return content.Option("uint32", func(param any) bool {
-		// 场景id
-		sceneId = param.(uint32)
+	return content.Option("uint32", func(p any) bool {
+		sceneId = p.(uint32)
 		return true
-	}).Dynamic("string", func(param any) bool {
-		// 参数1
-		param1 = param.(string)
+	}).Must("string", func(p any) bool {
+		param = p.(string)
 		return true
 	}).Execute(func() bool {
-		if param1 == "all" {
+		if param == "all" {
 			// 解锁当前场景所有锚点
 			c.gmCmd.GMUnlockAllPoint(content.AssignPlayer.PlayerId, sceneId)
 			content.SendSuccMessage(content.Executor, "已解锁所有锚点，指定UID：%v，场景ID：%v。", content.AssignPlayer.PlayerId, sceneId)
 			return true
 		}
 		// 锚点id
-		pointId, err := strconv.ParseUint(param1, 10, 32)
+		pointId, err := strconv.ParseUint(param, 10, 32)
 		if err != nil {
 			return false
 		}
@@ -990,25 +1046,23 @@ func (c *CommandManager) NewAreaCommandController() *CommandController {
 
 func (c *CommandManager) AreaCommand(content *CommandContent) bool {
 	var sceneId = content.AssignPlayer.GetSceneId() // 场景id
-	var param1 string                               // 参数1
+	var param string                                // 参数
 
-	return content.Option("uint32", func(param any) bool {
-		// 场景id
-		sceneId = param.(uint32)
+	return content.Option("uint32", func(p any) bool {
+		sceneId = p.(uint32)
 		return true
-	}).Dynamic("string", func(param any) bool {
-		// 参数1
-		param1 = param.(string)
+	}).Must("string", func(p any) bool {
+		param = p.(string)
 		return true
 	}).Execute(func() bool {
-		if param1 == "all" {
+		if param == "all" {
 			// 解锁当前场景所有区域
 			c.gmCmd.GMUnlockAllArea(content.AssignPlayer.PlayerId, sceneId)
 			content.SendSuccMessage(content.Executor, "已解锁所有区域，指定UID：%v，场景ID：%v。", content.AssignPlayer.PlayerId, sceneId)
 			return true
 		}
 		// 区域id
-		areaId, err := strconv.ParseUint(param1, 10, 32)
+		areaId, err := strconv.ParseUint(param, 10, 32)
 		if err != nil {
 			return false
 		}
@@ -1036,9 +1090,8 @@ func (c *CommandManager) NewWeatherCommandController() *CommandController {
 func (c *CommandManager) WeatherCommand(content *CommandContent) bool {
 	var climateType uint32 // 气象类型
 
-	return content.Dynamic("uint32", func(param any) bool {
-		// 气象类型
-		climateType = param.(uint32)
+	return content.Must("uint32", func(p any) bool {
+		climateType = p.(uint32)
 		return true
 	}).Execute(func() bool {
 		// 设置天气
@@ -1067,13 +1120,11 @@ func (c *CommandManager) OpenStateCommand(content *CommandContent) bool {
 	var param1 string // 参数1
 	var param2 int    // 参数2
 
-	return content.Dynamic("string", func(param any) bool {
-		// 参数1
-		param1 = param.(string)
+	return content.Must("string", func(p any) bool {
+		param1 = p.(string)
 		return true
-	}).Dynamic("int", func(param any) bool {
-		// 参数2
-		param2 = param.(int)
+	}).Must("int", func(p any) bool {
+		param2 = p.(int)
 		return true
 	}).Execute(func() bool {
 		if param1 == "all" {
@@ -1087,6 +1138,170 @@ func (c *CommandManager) OpenStateCommand(content *CommandContent) bool {
 		}
 		c.gmCmd.GMSetOpenState(content.AssignPlayer.PlayerId, uint32(openStateId), uint32(param2))
 		content.SendSuccMessage(content.Executor, "已设置功能开放值，指定UID：%v，功能开放ID：%v，值：%v。", content.AssignPlayer.PlayerId, openStateId, param2)
+		return true
+	})
+}
+
+// 命座命令
+
+func (c *CommandManager) NewTalentCommandController() *CommandController {
+	return &CommandController{
+		Name:        "命座",
+		AliasList:   []string{"talent"},
+		Description: "<color=#FFFFCC>{alias}</color> <color=#FFCC99>命座</color>",
+		UsageList: []string{
+			"{alias} <unlock/lock> <命座ID/all> 解锁或锁定当前角色命座",
+		},
+		Perm: CommandPermNormal,
+		Func: c.TalentCommand,
+	}
+}
+
+func (c *CommandManager) TalentCommand(content *CommandContent) bool {
+	var mode string  // 模式
+	var param string // 参数
+
+	return content.Must("string", func(p any) bool {
+		mode = p.(string)
+		return true
+	}).Must("string", func(p any) bool {
+		param = p.(string)
+		return true
+	}).Execute(func() bool {
+		switch mode {
+		case "unlock":
+			if param == "all" {
+				c.gmCmd.GMSetTalentUnlock(content.AssignPlayer.PlayerId, 0, true)
+				content.SendSuccMessage(content.Executor, "已解锁当前角色命座，指定UID：%v。", content.AssignPlayer.PlayerId)
+				return true
+			}
+			talentId, err := strconv.ParseUint(param, 10, 32)
+			if err != nil {
+				return false
+			}
+			c.gmCmd.GMSetTalentUnlock(content.AssignPlayer.PlayerId, uint32(talentId), true)
+			content.SendSuccMessage(content.Executor, "已解锁当前角色命座，指定UID：%v。", content.AssignPlayer.PlayerId)
+			return true
+		case "lock":
+			if param == "all" {
+				c.gmCmd.GMSetTalentUnlock(content.AssignPlayer.PlayerId, 0, false)
+				content.SendSuccMessage(content.Executor, "已锁定当前角色命座，指定UID：%v。", content.AssignPlayer.PlayerId)
+				return true
+			}
+			talentId, err := strconv.ParseUint(param, 10, 32)
+			if err != nil {
+				return false
+			}
+			c.gmCmd.GMSetTalentUnlock(content.AssignPlayer.PlayerId, uint32(talentId), false)
+			content.SendSuccMessage(content.Executor, "已锁定当前角色命座，指定UID：%v。", content.AssignPlayer.PlayerId)
+			return true
+		default:
+			return false
+		}
+	})
+}
+
+// 玩家等级命令
+
+func (c *CommandManager) NewPlayerCommandController() *CommandController {
+	return &CommandController{
+		Name:        "玩家等级",
+		AliasList:   []string{"player"},
+		Description: "<color=#FFFFCC>{alias}</color> <color=#FFCC99>玩家等级</color>",
+		UsageList: []string{
+			"{alias} level <冒险等级> 设置冒险等级",
+		},
+		Perm: CommandPermNormal,
+		Func: c.PlayerCommand,
+	}
+}
+
+func (c *CommandManager) PlayerCommand(content *CommandContent) bool {
+	var mode string  // 模式
+	var param string // 参数
+
+	return content.Must("string", func(p any) bool {
+		mode = p.(string)
+		return true
+	}).Must("string", func(p any) bool {
+		param = p.(string)
+		return true
+	}).Execute(func() bool {
+		switch mode {
+		case "level":
+			level, err := strconv.ParseUint(param, 10, 32)
+			if err != nil {
+				return false
+			}
+			c.gmCmd.GMSetPlayerLevelExp(content.AssignPlayer.PlayerId, uint32(level), 0)
+			content.SendSuccMessage(content.Executor, "已设置冒险等级，指定UID：%v。", content.AssignPlayer.PlayerId)
+			return true
+		default:
+			return false
+		}
+	})
+}
+
+// 角色等级命令
+
+func (c *CommandManager) NewLevelCommandController() *CommandController {
+	return &CommandController{
+		Name:        "角色等级",
+		AliasList:   []string{"level"},
+		Description: "<color=#FFFFCC>{alias}</color> <color=#FFCC99>角色等级</color>",
+		UsageList: []string{
+			"{alias} <等级> 设置当前角色等级",
+		},
+		Perm: CommandPermNormal,
+		Func: c.LevelCommand,
+	}
+}
+
+func (c *CommandManager) LevelCommand(content *CommandContent) bool {
+	var param string // 参数
+
+	return content.Must("string", func(p any) bool {
+		param = p.(string)
+		return true
+	}).Execute(func() bool {
+		level, err := strconv.ParseUint(param, 10, 32)
+		if err != nil {
+			return false
+		}
+		c.gmCmd.GMSetPlayerAvatarLevelExp(content.AssignPlayer.PlayerId, uint8(level), 0)
+		content.SendSuccMessage(content.Executor, "已设置当前角色等级，指定UID：%v。", content.AssignPlayer.PlayerId)
+		return true
+	})
+}
+
+// 角色突破命令
+
+func (c *CommandManager) NewBreakCommandController() *CommandController {
+	return &CommandController{
+		Name:        "角色突破",
+		AliasList:   []string{"break"},
+		Description: "<color=#FFFFCC>{alias}</color> <color=#FFCC99>角色突破</color>",
+		UsageList: []string{
+			"{alias} <突破阶段> 设置角色突破阶段",
+		},
+		Perm: CommandPermNormal,
+		Func: c.BreakCommand,
+	}
+}
+
+func (c *CommandManager) BreakCommand(content *CommandContent) bool {
+	var param string // 参数
+
+	return content.Must("string", func(p any) bool {
+		param = p.(string)
+		return true
+	}).Execute(func() bool {
+		promote, err := strconv.ParseUint(param, 10, 32)
+		if err != nil {
+			return false
+		}
+		c.gmCmd.GMSetPlayerAvatarPromote(content.AssignPlayer.PlayerId, uint8(promote))
+		content.SendSuccMessage(content.Executor, "已设置当前角色突破阶段，指定UID：%v。", content.AssignPlayer.PlayerId)
 		return true
 	})
 }
@@ -1109,9 +1324,8 @@ func (c *CommandManager) NewClearCommandController() *CommandController {
 func (c *CommandManager) ClearCommand(content *CommandContent) bool {
 	var mode string // 模式
 
-	return content.Dynamic("string", func(param any) bool {
-		// 模式
-		mode = param.(string)
+	return content.Must("string", func(p any) bool {
+		mode = p.(string)
 		return true
 	}).Execute(func() bool {
 		switch mode {
@@ -1135,6 +1349,7 @@ func (c *CommandManager) NewDebugCommandController() *CommandController {
 		UsageList: []string{
 			"{alias} freemode 自由探索模式",
 			"{alias} clearworld 清除大世界数据",
+			"{alias} scenetag 添加全部场景标签",
 			"{alias} notsave 本次离线回档",
 			"{alias} xluaswitch 开关xLua",
 			"{alias} gcgtest 七圣召唤测试",
@@ -1147,9 +1362,8 @@ func (c *CommandManager) NewDebugCommandController() *CommandController {
 func (c *CommandManager) DebugCommand(content *CommandContent) bool {
 	var mode string // 模式
 
-	return content.Dynamic("string", func(param any) bool {
-		// 模式
-		mode = param.(string)
+	return content.Must("string", func(p any) bool {
+		mode = p.(string)
 		return true
 	}).Execute(func() bool {
 		switch mode {
@@ -1160,6 +1374,10 @@ func (c *CommandManager) DebugCommand(content *CommandContent) bool {
 		case "clearworld":
 			c.gmCmd.GMClearWorld(content.AssignPlayer.PlayerId)
 			content.SendSuccMessage(content.Executor, "已清除大世界数据，指定UID：%v。", content.AssignPlayer.PlayerId)
+			return true
+		case "scenetag":
+			c.gmCmd.GMAddAllSceneTag(content.AssignPlayer.PlayerId, content.AssignPlayer.GetSceneId())
+			content.SendSuccMessage(content.Executor, "已添加全部场景标签，指定UID：%v。", content.AssignPlayer.PlayerId)
 			return true
 		case "notsave":
 			c.gmCmd.GMNotSave(content.AssignPlayer.PlayerId)

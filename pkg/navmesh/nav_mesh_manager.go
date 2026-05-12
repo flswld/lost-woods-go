@@ -1,3 +1,28 @@
+// NavMesh 寻路系统 - 整个 pkg/navmesh 包的入口
+//
+// 项目用途（详见 CLAUDE.md "pkg/navmesh"）：
+//   - multi 服寻路：怪物 AI 通过 QueryPathReq 计算路径
+//   - 障碍物 carving：动态障碍物（暂未启用）
+//   - 玩家位置合法性校验（GS isValidScenePos）
+//
+// **重要**：整个 navmesh 包是从 Unity 的 NavMesh C++ 源码移植的
+//   - 带 .cpp.go 后缀的文件是直接 C++ 翻译版（保留原命名风格 m_xxx 私有字段）
+//   - 没有后缀的文件是 Go 风格的封装层
+//   - **不建议改 .cpp.go 文件**：与 Unity 版本对齐 bug 修了将来同步成本高
+//
+// 关键 API：
+//   - NewNavMeshManager: 创建寻路管理器（每个场景一个）
+//   - LoadNavMeshData: 加载预计算的 NavMesh 数据（.gob/.txt/.mhy 格式）
+//   - CalculatePath: 计算两点间路径
+//   - Raycast: 射线检测
+//   - FindNearestPoint: 寻找最近 NavMesh 点
+//   - AddObstacle/RemoveObstacle: 动态障碍物管理
+//
+// 数据格式（pkg/navmesh/format/）：
+//   - .gob: Go 原生序列化（项目自用）
+//   - .txt: Unity 导出文本格式
+//   - .mhy: 米哈游内部二进制格式（3.2 那次泄漏带出来的原数据）
+
 package navmesh
 
 import (

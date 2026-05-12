@@ -8,7 +8,24 @@ import (
 	"github.com/flswld/halo/logger"
 )
 
-// hk4e游戏协议编解码
+// hk4e 游戏协议编解码 - KCP 数据包到协议消息的转换层
+//
+// 这一层负责把 KCP 传输层的二进制数据流解码为单个协议消息
+// 上层 ProtoDecode 再把 KcpMsg 转换为最终的 *ProtoMsg
+//
+// 协议结构（带 * 为 xor 加密的部分）：
+//   - KCP 头（前 28 字节）：sessionId / conv / cmd / wnd / ts / sn / una / len
+//     · 由 KCP 协议库（halo/protocol/kcp）处理 这里只看里面的 payload 部分
+//   - hk4e 业务包（紧跟在 KCP payload 里）：
+//     · 头部幻数 0x4567（2 字节 大端 BE）
+//     · cmdId（2 字节 BE）：业务命令号
+//     · headLen（2 字节 BE）：PacketHead 长度
+//     · payloadLen（4 字节 BE）：proto 数据长度
+//     · headData（headLen 字节）：PacketHead protobuf
+//     · protoData（payloadLen 字节）：业务消息 protobuf
+//     · 尾部幻数 0x89AB（2 字节 BE）：作为完整性校验
+//
+// 整个 hk4e 业务包都被 XOR 加密 密钥来自 GetPlayerTokenRsp 的 SecretKey
 
 /*
 										原神KCP协议(带*为xor加密数据)
@@ -28,13 +45,17 @@ import (
 +---------------------------------------------------------------------------------------+
 */
 
+// KcpMsg 单个 hk4e 业务包（KCP payload 解析后的中间结构）
 type KcpMsg struct {
-	SessionId uint32
-	CmdId     uint16
-	HeadData  []byte
-	ProtoData []byte
+	SessionId uint32 // KCP session id
+	CmdId     uint16 // 业务命令号（已转换为服务端 3.2 版本的 cmdId）
+	HeadData  []byte // PacketHead protobuf 二进制
+	ProtoData []byte // 业务消息 protobuf 二进制
 }
 
+// DecodeBinToPayload 把 KCP payload 解码为 KcpMsg 列表（外层入口）
+// 一个 KCP payload 可能包含多个连续的业务包 走 DecodeLoop 递归解析
+// xor 解密用 session 的 SecretKey 服务端通过 GetPlayerTokenRsp 下发给客户端
 func DecodeBinToPayload(data []byte, sessionId uint32, kcpMsgList *[]*KcpMsg, xorKey []byte) {
 	// xor解密
 	endec.Xor(data, xorKey)
@@ -42,6 +63,16 @@ func DecodeBinToPayload(data []byte, sessionId uint32, kcpMsgList *[]*KcpMsg, xo
 	return
 }
 
+// DecodeLoop 递归解析 KCP payload 中的所有 hk4e 业务包
+//
+// 校验：
+//  1. 长度至少 12 字节（头 10 字节 + 尾 2 字节）
+//  2. 头部幻数 0x4567
+//  3. PacketMaxLen 上限保护（343KB 约定上限 防止恶意大包）
+//  4. 实际长度 >= 声明长度
+//  5. 尾部幻数 0x89AB
+//
+// 任意校验失败直接 return 不抛错（避免被恶意客户端造包刷日志）
 func DecodeLoop(data []byte, sessionId uint32, kcpMsgList *[]*KcpMsg) {
 	// 长度太短
 	if len(data) < 12 {
@@ -91,6 +122,9 @@ func DecodeLoop(data []byte, sessionId uint32, kcpMsgList *[]*KcpMsg) {
 	}
 }
 
+// EncodePayloadToBin 把 KcpMsg 编码为 KCP payload 二进制
+// 与 DecodeBinToPayload 对称：组装幻数+长度字段+headData+protoData → xor 加密
+// 单包大小受 PacketMaxLen 限制（一般 < 343KB）超限直接返回空切片
 func EncodePayloadToBin(kcpMsg *KcpMsg, xorKey []byte) (bin []byte) {
 	if kcpMsg.HeadData == nil {
 		kcpMsg.HeadData = make([]byte, 0)

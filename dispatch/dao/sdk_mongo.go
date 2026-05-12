@@ -10,6 +10,9 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
+// SDK 全局信息双实现（mongo / gorm 自动切换）
+
+// InsertSdk 仅服务首次启动调用一次（只插 1 行）
 func (d *Dao) InsertSdk(sdk *model.Sdk) error {
 	if d.mongo == nil {
 		return d.InsertSdkGorm(sdk)
@@ -22,6 +25,7 @@ func (d *Dao) InsertSdk(sdk *model.Sdk) error {
 	return nil
 }
 
+// UpdateSdk 服务关闭时把 nextSdkAccountId 写回（standalone 模式）
 func (d *Dao) UpdateSdk(sdk *model.Sdk) error {
 	if d.mongo == nil {
 		return d.UpdateSdkGorm(sdk)
@@ -38,6 +42,7 @@ func (d *Dao) UpdateSdk(sdk *model.Sdk) error {
 	return nil
 }
 
+// QuerySdk 服务启动时加载（不存在返回 nil 触发首次 InsertSdk）
 func (d *Dao) QuerySdk() (*model.Sdk, error) {
 	if d.mongo == nil {
 		return d.QuerySdkGorm()

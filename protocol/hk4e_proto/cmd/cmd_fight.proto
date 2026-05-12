@@ -1,3 +1,5 @@
+// 战斗协议
+
 syntax = "proto3";
 
 package proto;
@@ -6,16 +8,17 @@ import "define.proto";
 
 option go_package = "./;proto";
 
+// 消息的转发类别
 enum ForwardType {
-    FORWARD_LOCAL = 0;
-    FORWARD_TO_ALL = 1;
-    FORWARD_TO_ALL_EXCEPT_CUR = 2;
-    FORWARD_TO_HOST = 3;
-    FORWARD_TO_ALL_GUEST = 4;
-    FORWARD_TO_PEER = 5;
-    FORWARD_TO_PEERS = 6;
-    FORWARD_ONLY_SERVER = 7;
-    FORWARD_TO_ALL_EXIST_EXCEPT_CUR = 8;
+    FORWARD_LOCAL = 0;                   // 只是本地
+    FORWARD_TO_ALL = 1;                  // 发给所有的客户端
+    FORWARD_TO_ALL_EXCEPT_CUR = 2;       // 发给除了自己的客户端
+    FORWARD_TO_HOST = 3;                 // 发给主机
+    FORWARD_TO_ALL_GUEST = 4;            // 发给所有的客机（除了主机）
+    FORWARD_TO_PEER = 5;                 // 发给某个指定的peer，读取固定字段forward_peer
+    FORWARD_TO_PEERS = 6;                // 转发给指定的某些PeerId，读取固定字段forward_peer_list
+    FORWARD_ONLY_SERVER = 7;             // 只发送给服务器的，不用转发给其他机器
+    FORWARD_TO_ALL_EXIST_EXCEPT_CUR = 8; // 转发给除了当前剩下的所有有给定entityid单位的客户端
 }
 
 enum HitColliderType {
@@ -47,6 +50,7 @@ enum CombatTypeArgument {
     COMBAT_GRAPPLING_HOOK_MOVE = 18;
 }
 
+// Hitcollision
 message HitCollision {
     HitColliderType hit_collider_type = 8;
     Vector hit_point = 7;
@@ -56,15 +60,17 @@ message HitCollision {
     int32 hit_box_index = 4;
 }
 
+// AttackHitEffectResult
 message AttackHitEffectResult {
     float hit_halt_time_scale = 8;
     uint32 original_hit_eff_level = 12;
-    float air_strength = 15;
-    uint32 hit_eff_level = 2;
+    float air_strength = 15;    // 被击飞的程度
+    uint32 hit_eff_level = 2;   // ConfigCombat.h data::HitLevel
     float hit_halt_time = 13;
-    float retreat_strength = 7;
+    float retreat_strength = 7; // 被击退的程度
 }
 
+// 用来确定ability的，ability modifier和action的local id索引
 message AbilityIdentifier {
     uint32 modifier_owner_id = 2;
     uint32 instanced_modifier_id = 9;
@@ -74,8 +80,9 @@ message AbilityIdentifier {
     int32 local_id = 3;
 }
 
+// AttackResult，伤害的打包消息 之后Config中的东西会通过animeventid和技能的index来替换掉，减少流量消耗
 message AttackResult {
-    bool is_resist_text = 1858;
+    bool is_resist_text = 1858;             // 客户端纯表现用，是否被抵抗
     uint32 create_count_sync_to_server = 1011;
     uint32 amplify_reaction_type = 2005;
     uint32 endure_break = 7;
@@ -85,28 +92,29 @@ message AttackResult {
     uint32 attack_timestamp_ms = 1188;
     uint32 bullet_fly_time_ms = 91;
     bool is_crit = 13;
-    float element_amplify_rate = 900;
+    float element_amplify_rate = 900;       // 某些元素反应会放大本次的最终伤害
     uint32 attack_count = 1564;
-    uint32 critical_rand = 1664;
+    uint32 critical_rand = 1664;            // 暴伤随机数
     uint32 hit_pos_type = 2;
     string anim_event_id = 4;
     AttackHitEffectResult hit_eff_result = 8;
-    float damage_shield = 1202;
+    float damage_shield = 1202;             // 用来计算元素盾伤害，因为Damage很有可能被重置，导致元素盾不正确
     float endure_delta = 430;
     Vector resolved_dir = 1;
     float damage = 6;
     uint32 addhurt_reaction_type = 1887;
     uint32 hashed_anim_event_id = 278;
-    bool use_gadget_damage_action = 1418;
+    bool use_gadget_damage_action = 1418;   // 直接使用gadget trigger action damagebyattackvalue
     int32 hit_retreat_angle_compat = 9;
     AbilityIdentifier ability_identifier = 14;
     uint32 attacker_id = 11;
-    bool mute_element_hurt = 1530;
+    bool mute_element_hurt = 1530;          // 是否元素免伤
     uint32 target_type = 1366;
     HitCollision hit_collision = 10;
-    uint32 gadget_damage_action_idx = 1110;
+    uint32 gadget_damage_action_idx = 1110; // 使用的action索引
 }
 
+// 单位被击中的消息数据
 message EvtBeingHitInfo {
     uint32 peer_id = 6;
     AttackResult attack_result = 7;
@@ -118,6 +126,7 @@ message EvtHittingOtherInfo {
     uint32 peer_id = 8;
 }
 
+// 单位被击中的消息，服务器负责转发到所有客户端(Server -> All Client, forward_type == FORWARD_TO_ALL)
 message EvtBeingHitNotify {
     enum CmdId {
         option allow_alias = true;
@@ -134,11 +143,12 @@ message EvtBeingHitNotify {
 
 message EvtAnimatorParameterInfo {
     uint32 entity_id = 4;
-    bool is_server_cache = 5;
-    AnimatorParameterValueInfo value = 7;
-    int32 name_id = 15;
+    bool is_server_cache = 5;             // 服务器帮忙缓存动画参数
+    AnimatorParameterValueInfo value = 7; // 动画值信息
+    int32 name_id = 15;                   // 动画名称ID
 }
 
+// 动画的同步消息，服务器负责转发到除了当前客户端的其他客户端(Server -> All Client Except Cur, forward_type == FORWARD_TO_ALL_EXCEPT_CUR)
 message EvtAnimatorParameterNotify {
     enum CmdId {
         option allow_alias = true;
@@ -161,6 +171,7 @@ message AbilityArgument {
     }
 }
 
+// 主机通知
 message HostPlayerNotify {
     enum CmdId {
         option allow_alias = true;
@@ -170,10 +181,11 @@ message HostPlayerNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 host_peer_id = 13;
-    uint32 host_uid = 10;
+    uint32 host_peer_id = 13; // 主机PeerID
+    uint32 host_uid = 10;     // 主机UID
 }
 
+// 单位发起主动技能消息，服务器负责转发到所有客户端(Server -> All Client Except cur, forward_type == FORWARD_TO_ALL_EXCEPT_CUR)
 message EvtDoSkillSuccNotify {
     enum CmdId {
         option allow_alias = true;
@@ -186,10 +198,12 @@ message EvtDoSkillSuccNotify {
 
     uint32 caster_id = 13;
     ForwardType forward_type = 10;
+    // 攻击瞬间强制设置面向
     Vector forward = 15;
     uint32 skill_id = 7;
 }
 
+// authority创建动态gaget的请求，服务器负责转发到其他客户端
 message EvtCreateGadgetNotify {
     enum CmdId {
         option allow_alias = true;
@@ -221,6 +235,7 @@ message EvtCreateGadgetNotify {
     uint32 config_id = 14;
 }
 
+// authority销毁动态gaget的请求
 message EvtDestroyGadgetNotify {
     enum CmdId {
         option allow_alias = true;
@@ -235,6 +250,7 @@ message EvtDestroyGadgetNotify {
     uint32 entity_id = 3;
 }
 
+// 强制转向指定单位
 message EvtFaceToEntityNotify {
     enum CmdId {
         option allow_alias = true;
@@ -250,11 +266,13 @@ message EvtFaceToEntityNotify {
     uint32 entity_id = 1;
 }
 
+// 强制转向指定方向
 message EvtFaceToDirInfo {
     uint32 entity_id = 12;
     Vector face_dir = 14;
 }
 
+// 强制转向指定方向
 message EvtFaceToDirNotify {
     enum CmdId {
         option allow_alias = true;
@@ -269,6 +287,7 @@ message EvtFaceToDirNotify {
     EvtFaceToDirInfo evt_face_to_dir_info = 5;
 }
 
+// authority扣体力的请求
 message EvtCostStaminaNotify {
     enum CmdId {
         option allow_alias = true;
@@ -289,6 +308,7 @@ message EvtSetAttackTargetInfo {
     uint32 attack_target_id = 7;
 }
 
+// 同步切换目标
 message EvtSetAttackTargetNotify {
     enum CmdId {
         option allow_alias = true;
@@ -365,6 +385,7 @@ message EvtGrapplingHookMove {
     Vector target_pos = 10;
 }
 
+// 动画的同步消息，服务器负责转发到除了当前客户端的其他客户端(Server -> All Client Except Cur, forward_type == FORWARD_TO_ALL_EXCEPT_CUR)
 message EvtAnimatorStateChangedNotify {
     enum CmdId {
         option allow_alias = true;
@@ -380,14 +401,14 @@ message EvtAnimatorStateChangedNotify {
 }
 
 message EvtRushMoveInfo {
-    int32 state_name_hash = 11;
-    Vector rush_to_pos = 9;
-    Vector rush_attack_target_pos = 8;
+    int32 state_name_hash = 11;        // 为了校验本次rushmove
+    Vector rush_to_pos = 9;            // rush to point
+    Vector rush_attack_target_pos = 8; // rush attack target pos
     uint32 entity_id = 4;
     float timeRange = 15;
     Vector velocity = 6;
-    Vector pos = 2;
-    int32 face_angle_compact = 10;
+    Vector pos = 2;                    // entity rush move start pos
+    int32 face_angle_compact = 10;     // entity rush move start face angle
 }
 
 message EvtMotionInfoDuringSteerAttack {
@@ -419,6 +440,7 @@ message EvtSyncEntityPositionInfo {
     Vector pos = 15;
 }
 
+// rushMove 同步消息
 message EvtRushMoveNotify {
     enum CmdId {
         option allow_alias = true;
@@ -433,6 +455,7 @@ message EvtRushMoveNotify {
     EvtRushMoveInfo evt_rush_move_info = 15;
 }
 
+// 子弹独有的命中的消息
 message EvtBulletHitNotify {
     enum CmdId {
         option allow_alias = true;
@@ -454,6 +477,7 @@ message EvtBulletHitNotify {
     HitColliderType hit_collider_type = 6;
 }
 
+// 子弹独有的隐藏的消息
 message EvtBulletDeactiveNotify {
     enum CmdId {
         option allow_alias = true;
@@ -469,6 +493,7 @@ message EvtBulletDeactiveNotify {
     Vector disappear_pos = 4;
 }
 
+// entity开始dieend的消息，用来remote那边的startend和authority同步，否则会出现比如安伯的娃娃authority那边dieend，但是remote timer计时没到，就没有dieend，但是又做了技能的action了，看起来不同步
 message EvtEntityStartDieEndNotify {
     enum CmdId {
         option allow_alias = true;
@@ -485,6 +510,7 @@ message EvtEntityStartDieEndNotify {
     ForwardType forward_type = 11;
 }
 
+// 子弹移动同步消息
 message EvtBulletMoveNotify {
     enum CmdId {
         option allow_alias = true;
@@ -496,10 +522,11 @@ message EvtBulletMoveNotify {
     }
 
     ForwardType forward_type = 14;
-    Vector cur_pos = 1;
+    Vector cur_pos = 1; // 当前位置
     uint32 entity_id = 11;
 }
 
+// 进入瞄准模式
 message EvtAvatarEnterFocusNotify {
     enum CmdId {
         option allow_alias = true;
@@ -525,6 +552,7 @@ message EvtAvatarEnterFocusNotify {
     bool use_gyro = 11;
 }
 
+// 退出瞄准模式
 message EvtAvatarExitFocusNotify {
     enum CmdId {
         option allow_alias = true;
@@ -540,6 +568,7 @@ message EvtAvatarExitFocusNotify {
     uint32 entity_id = 14;
 }
 
+// 瞄准模式中定期更新瞄准信息，比如瞄准的单位，摇杆相关参数等
 message EvtAvatarUpdateFocusNotify {
     enum CmdId {
         option allow_alias = true;
@@ -561,6 +590,7 @@ message AuthorityChange {
     uint32 entity_id = 13;
 }
 
+// 实体的Authority切换通知(S->C)
 message EntityAuthorityChangeNotify {
     enum CmdId {
         option allow_alias = true;
@@ -573,6 +603,7 @@ message EntityAuthorityChangeNotify {
     repeated AuthorityChange authority_change_list = 15;
 }
 
+// 服务器AvatarBuff添加通知
 message AvatarBuffAddNotify {
     enum CmdId {
         option allow_alias = true;
@@ -583,10 +614,11 @@ message AvatarBuffAddNotify {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint64 avatar_guid = 10;
-    uint32 buff_id = 6;
+    uint64 avatar_guid = 10; // Avatar Guid
+    uint32 buff_id = 6;      // Buff ID
 }
 
+// 服务器AvatarBuff删除通知
 message AvatarBuffDelNotify {
     enum CmdId {
         option allow_alias = true;
@@ -597,10 +629,12 @@ message AvatarBuffDelNotify {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint64 avatar_guid = 10;
-    uint32 buff_id = 12;
+    uint64 avatar_guid = 10; // Avatar Guid
+    uint32 buff_id = 12;     // Buff ID
 }
 
+// 角色进入或退出战斗状态上报服务器(C->S)
+// 怪物被杀死或角色离开场景时不用上报
 message MonsterAlertChangeNotify {
     enum CmdId {
         option allow_alias = true;
@@ -611,11 +645,13 @@ message MonsterAlertChangeNotify {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 avatar_entity_id = 15;
-    repeated uint32 monster_entity_list = 5;
-    uint32 is_alert = 13;
+    uint32 avatar_entity_id = 15;            // 角色entity_id
+    repeated uint32 monster_entity_list = 5; // 多个怪物同时入战
+    uint32 is_alert = 13;                    // 是否变为alert
 }
 
+// 服务器脚本设置客户端怪物入战或脱战（S->C）
+// 客户端的怪物因为这个协议而改变状态的话也需要上报服务器
 message MonsterForceAlertNotify {
     enum CmdId {
         option allow_alias = true;
@@ -625,9 +661,10 @@ message MonsterForceAlertNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 monster_entity_id = 13;
+    uint32 monster_entity_id = 13; // 怪物的entity_id
 }
 
+// 角色进入元素视野上报服务器(C->S)
 message AvatarEnterElementViewNotify {
     enum CmdId {
         option allow_alias = true;
@@ -638,10 +675,11 @@ message AvatarEnterElementViewNotify {
         IS_ALLOW_CLIENT = 1;
     }
 
-    bool is_triggerd = 3;
-    uint32 avatar_entity_id = 12;
+    bool is_triggerd = 3;         // true:开启元素视野 false:关闭元素视野
+    uint32 avatar_entity_id = 12; // 角色entity_id
 }
 
+// 创建Gadget到equippart上(S->C)
 message TriggerCreateGadgetToEquipPartNotify {
     enum CmdId {
         option allow_alias = true;
@@ -651,12 +689,13 @@ message TriggerCreateGadgetToEquipPartNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 gadget_id = 1;
-    uint32 entity_id = 13;
-    string equip_part = 14;
-    uint32 gadget_entity_id = 10;
+    uint32 gadget_id = 1;         // equip的gadget_id
+    uint32 entity_id = 13;        // owner的entity_id
+    string equip_part = 14;       // owner的equip_part
+    uint32 gadget_entity_id = 10; // gadget的entity_id
 }
 
+// Entity的哪些部件(Transform)被隐藏，服务器负责转发到除了当前客户端的其他客户端(Server -> All Client Except Cur, forward_type == FORWARD_TO_ALL_EXCEPT_CUR)
 message EvtEntityRenderersChangedNotify {
     enum CmdId {
         option allow_alias = true;
@@ -668,11 +707,12 @@ message EvtEntityRenderersChangedNotify {
     }
 
     ForwardType forward_type = 8;
-    bool is_server_cache = 3;
-    EntityRendererChangedInfo renderer_changed_info = 5;
+    bool is_server_cache = 3;                            // 服务器帮忙缓存 Entity Renderers
+    EntityRendererChangedInfo renderer_changed_info = 5; // Entity Renderers的名称列表
     uint32 entity_id = 15;
 }
 
+// Animator的ForceSetAirMove通知，服务器负责转发到除了当前客户端的其他客户端(Server -> All Client Except Cur, forward_type == FORWARD_TO_ALL_EXCEPT_CUR)
 message AnimatorForceSetAirMoveNotify {
     enum CmdId {
         option allow_alias = true;
@@ -688,11 +728,13 @@ message AnimatorForceSetAirMoveNotify {
     ForwardType forward_type = 9;
 }
 
+// AI的CD时间
 message AiSkillCdInfo {
-    map<uint32, uint32> skill_cd_map = 11;
+    map<uint32, uint32> skill_cd_map = 11; // CD时间(key:skill_id)
     map<uint32, uint32> skill_group_cd_map = 6;
 }
 
+// 同步AI的CD时间通知(C->S)
 message EvtAiSyncSkillCdNotify {
     enum CmdId {
         option allow_alias = true;
@@ -703,9 +745,10 @@ message EvtAiSyncSkillCdNotify {
         IS_ALLOW_CLIENT = 1;
     }
 
-    map<uint32, AiSkillCdInfo> ai_cd_map = 7;
+    map<uint32, AiSkillCdInfo> ai_cd_map = 7; // AI的CD时间(key:entity_id)
 }
 
+// EvtBegingHit合包，服务器负责转发到所有客户端(Server -> All Client, forward_type == FORWARD_TO_ALL)
 message EvtBeingHitsCombineNotify {
     enum CmdId {
         option allow_alias = true;
@@ -720,6 +763,7 @@ message EvtBeingHitsCombineNotify {
     repeated EvtBeingHitInfo evt_being_hit_info_list = 7;
 }
 
+// 同步角色坐下
 message EvtAvatarSitDownNotify {
     enum CmdId {
         option allow_alias = true;
@@ -735,6 +779,7 @@ message EvtAvatarSitDownNotify {
     uint64 chair_id = 6;
 }
 
+// 同步角色站起
 message EvtAvatarStandUpNotify {
     enum CmdId {
         option allow_alias = true;
@@ -751,6 +796,7 @@ message EvtAvatarStandUpNotify {
     uint32 entity_id = 9;
 }
 
+// 客户端发起创建MassiveEntity的请求
 message CreateMassiveEntityReq {
     enum CmdId {
         option allow_alias = true;
@@ -776,6 +822,7 @@ message CreateMassiveEntityRsp {
     int32 retcode = 1;
 }
 
+// 服务器创建MassiveEntity转发给所有的客户端
 message CreateMassiveEntityNotify {
     enum CmdId {
         option allow_alias = true;
@@ -788,6 +835,7 @@ message CreateMassiveEntityNotify {
     repeated ServerMassiveEntity massive_entity_list = 15;
 }
 
+// 删除MassiveEntity的通知，服务器
 message DestroyMassiveEntityNotify {
     enum CmdId {
         option allow_alias = true;
@@ -801,6 +849,7 @@ message DestroyMassiveEntityNotify {
     repeated ClientMassiveEntity massive_entity_list = 7;
 }
 
+// MassiveEntity的元素反应状态变化同步，只在authority上做，同步给remote
 message MassiveEntityStateChangedNotify {
     enum CmdId {
         option allow_alias = true;
@@ -820,6 +869,7 @@ message TeamEntityInfo {
     uint32 team_entity_id = 8;
 }
 
+// 全量更新
 message SyncTeamEntityNotify {
     enum CmdId {
         option allow_alias = true;
@@ -870,6 +920,7 @@ message CombatInvocationsNotify {
     repeated CombatInvokeEntry invoke_list = 14;
 }
 
+// ServerBuff增减通知
 message ServerBuffChangeNotify {
     enum CmdId {
         option allow_alias = true;
@@ -884,15 +935,16 @@ message ServerBuffChangeNotify {
         DEL_SERVER_BUFF = 1;
     }
 
-    ServerBuffChangeType server_buff_change_type = 7;
+    ServerBuffChangeType server_buff_change_type = 7; // 增加还是删除
     bool is_creature_buff = 10;
     repeated uint32 entity_id_list = 1;
-    repeated uint64 avatar_guid_list = 12;
-    repeated ServerBuff server_buff_list = 11;
+    repeated uint64 avatar_guid_list = 12;            // 哪些avatar
+    repeated ServerBuff server_buff_list = 11;        // 哪些server_buff
 }
 
+// 客户端同步AI仇恨
 message AiThreatInfo {
-    map<uint32, uint32> ai_threat_map = 11;
+    map<uint32, uint32> ai_threat_map = 11; // key:仇恨对象EntityID，value:仇恨值
 }
 
 message EvtAiSyncCombatThreatInfoNotify {
@@ -905,7 +957,7 @@ message EvtAiSyncCombatThreatInfoNotify {
         IS_ALLOW_CLIENT = 1;
     }
 
-    map<uint32, AiThreatInfo> combat_threat_info_map = 8;
+    map<uint32, AiThreatInfo> combat_threat_info_map = 8; // key:AI的EntityID
 }
 
 message MassiveEntityElementOpBatchNotify {

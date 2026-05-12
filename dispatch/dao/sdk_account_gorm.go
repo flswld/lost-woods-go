@@ -1,3 +1,12 @@
+// SDK 账号表 Gorm 实现（mysql/sqlite 模式 与 sdk_account_mongo.go 双实现）
+//
+// 与 Mongo 实现的接口名完全对应：
+//   - InsertSdkAccountGorm ↔ InsertSdkAccount（Mongo 时调）
+//   - UpdateSdkAccountFieldByFieldNameGorm ↔ UpdateSdkAccountFieldByFieldName
+//   - QuerySdkAccountByFieldGorm ↔ QuerySdkAccountByField
+//
+// Mongo 实现层会按 d.mongo 是否 nil 自动 fallback 到这里 上层无感
+
 package dao
 
 import (

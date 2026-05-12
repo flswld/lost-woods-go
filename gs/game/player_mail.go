@@ -12,8 +12,29 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
+// 邮件 模块（极简版）
+//
+// **现状**：基础数据流程完整 但功能极简：
+//   - 发件人固定为 "flswld"（作者本人）
+//   - 过期时间固定 24 小时
+//   - **附件功能未实现**：PacketMail 返回 ItemList=nil，GetMailItemReq 返回空 ItemList
+//   - 仅支持文本邮件（标题+内容）
+//
+// 数据存储：player.MailMap[mailId] → Mail 对象（**仅在线时有数据 不持久化** mailMap 是临时字段）
+// MailIdSeq 是全局自增 服务重启后归零（已发的邮件 id 都重置）
+//
+// 主要请求：
+//   - GetAllMailReq / GetAllMailNotify: 拉取全部邮件
+//   - DelMailReq: 删除邮件
+//   - GetMailItemReq: 领取附件（占位 不发任何物品）
+//   - ReadMailNotify: 标记已读
+//   - ChangeMailStarNotify: 加/取消星标
+//
+// AddPlayerMail 是发邮件的内部 API（GM 全服公告/系统通知用）
+
 /************************************************** 接口请求 **************************************************/
 
+// GetAllMailReq 拉取全部邮件请求（旧版客户端用 PacketMailList 全量返回）
 func (g *Game) GetAllMailReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.GetAllMailReq)
 
@@ -25,6 +46,8 @@ func (g *Game) GetAllMailReq(player *model.Player, payloadMsg pb.Message) {
 	g.SendMsg(cmd.GetAllMailRsp, player.PlayerId, player.ClientSeq, rsp)
 }
 
+// GetAllMailNotify v4.0+ 客户端的邮件拉取（分页机制 当前固定返回 1 页全量）
+// PageIndex=1, TotalPageCount=1 永远只有 1 页（项目邮件量小不需要分页）
 func (g *Game) GetAllMailNotify(player *model.Player, payloadMsg pb.Message) {
 	ntf := payloadMsg.(*proto.GetAllMailNotify)
 
@@ -77,6 +100,11 @@ func (g *Game) ChangeMailStarNotify(player *model.Player, payloadMsg pb.Message)
 
 var MailIdSeq uint32 = 0
 
+// AddPlayerMail 给玩家发邮件（系统通知/GM 公告/任务奖励等内部 API）
+//
+// 仅支持文本邮件 不能附道具（项目邮件附件未实现）
+// 发件人固定 "flswld"（作者用户名）
+// 过期时间固定 24 小时（玩家不及时收会丢失）
 func (g *Game) AddPlayerMail(userId uint32, title string, content string) {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {

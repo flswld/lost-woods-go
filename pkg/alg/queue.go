@@ -1,3 +1,8 @@
+// 链表队列 - BFS 寻路用的简单 FIFO 队列实现
+//
+// Go 标准库 container/list 也能做但项目作者写了这个简化版
+// 主要用在 bfs_pathfinding.go 寻路时需要 FIFO 顺序展开节点
+
 package alg
 
 type LinkList struct {

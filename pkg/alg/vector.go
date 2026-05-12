@@ -1,10 +1,20 @@
+// 向量数学工具集 - Vector2/Vector3 + MeshVector
+//
+// 与 navmesh.Vector3f 区分：
+//   - alg.Vector3 用于业务层（坐标计算 / AOI / Shape 检测）
+//   - navmesh.Vector3f 用于 navmesh 包内部（与 Unity C++ 移植代码兼容）
+//
+// 提供：
+//   - Vector2/Vector3 加减/模长/点积/距离/归一化
+//   - MeshVector：3D 整数坐标（用于 BFS 网格寻路）
+
 package alg
 
 import (
 	"math"
 )
 
-// Vector2 二维向量
+// Vector2 二维向量（X/Z 平面 用于水平面计算 视野/距离/AOI）
 type Vector2 struct {
 	X float32
 	Z float32

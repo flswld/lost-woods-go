@@ -13,12 +13,28 @@ import (
 	lua "github.com/yuin/gopher-lua"
 )
 
+// Lua 桥接 模块
+//
+// 项目场景 Lua 是从原神官服 dump 出来的原版配置（不是项目作者写的）
+// 描述大世界场景里有什么 + 局部交互逻辑（如"打死守卫怪→解锁宝箱"）
+//
+// Go ↔ Lua 双向调用：
+//   - Go → Lua: CallSceneLuaFunc / CallGadgetLuaFunc 调用 Lua 函数（trigger condition/action 等）
+//   - Lua → Go: ScriptLib 暴露给 Lua 的几十个 API（SetGadgetState/CreateMonster/AddQuestProgress 等）
+//
+// LuaCtx + LuaEvt 是两个 Lua table 包装结构 通过 SetField 转换为 Lua 表传给 Lua 函数
+// Lua 函数通过 ScriptLib 的 GetContextPlayer/GetContextGroup 反向取出这些上下文信息
+//
+// EndlessLoopCheck 防止 Lua 触发器递归（如 Lua A 调 Go → Go 触发 Lua B → Lua B 又调 Go → ...）
+// 死循环保护阈值是 EndlessLoopCheckTypeCallLuaFunc 在 game.go 中定义
+
+// LuaCtx Lua 调用上下文 表示"谁在操作什么实体"（玩家uid/世界主uid/源/目标实体/group）
 type LuaCtx struct {
-	uid            uint32
-	ownerUid       uint32
-	sourceEntityId uint32
-	targetEntityId uint32
-	groupId        uint32
+	uid            uint32 // 触发玩家 uid
+	ownerUid       uint32 // 世界主 uid（多人世界用）
+	sourceEntityId uint32 // 源实体（如发动技能的实体）
+	targetEntityId uint32 // 目标实体（如被击中的实体）
+	groupId        uint32 // 当前操作所在的 group
 }
 
 type LuaEvt struct {
@@ -34,7 +50,13 @@ type LuaEvt struct {
 	targetEntityId uint32
 }
 
-// CallSceneLuaFunc 调用场景LUA方法
+// CallSceneLuaFunc Go 调用场景 Lua 函数（trigger condition/action 入口）
+//
+// 把 luaCtx + luaEvt 包装成两个 Lua table 调用 Lua 全局函数 luaFuncName
+// 函数返回值约定：bool（true=匹配/执行）或 number（0/正数/-1 等→约定的状态码）
+// 异常：捕获后只记录日志返回 false 不会让 Lua 错误冒到 Go 层
+//
+// 调用方：lua_trigger.go 的 Trigger 检测函数（如 SceneRegionTriggerCheck/MonsterDieTriggerCheck）
 func CallSceneLuaFunc(luaState *lua.LState, luaFuncName string, luaCtx *LuaCtx, luaEvt *LuaEvt) bool {
 	GAME.EndlessLoopCheck(EndlessLoopCheckTypeCallLuaFunc)
 	ctx := luaState.NewTable()
@@ -75,7 +97,15 @@ func CallSceneLuaFunc(luaState *lua.LState, luaFuncName string, luaCtx *LuaCtx, 
 	}
 }
 
-// CallGadgetLuaFunc 调用物件LUA方法
+// CallGadgetLuaFunc Go 调用物件 Lua 脚本函数
+//
+// 物件 Lua 脚本是物件级的本地脚本（每个 Gadget 类型有自己的脚本）
+// 与场景 Lua 不同：物件 Lua 用专用入口名 + 专用参数列表（不走 LuaEvt 通用包装）
+//
+// 已知钩子：
+//   - OnClientExecuteReq: 客户端发起物件请求（如机关交互）
+//   - OnBeHurt: 物件被攻击（用于响应元素反应/状态机切换）
+//   - OnDie: 物件死亡（如打破破坏物 触发奖励）
 func CallGadgetLuaFunc(luaState *lua.LState, luaFuncName string, luaCtx *LuaCtx, param ...any) bool {
 	GAME.EndlessLoopCheck(EndlessLoopCheckTypeCallLuaFunc)
 	ctx := luaState.NewTable()
@@ -159,7 +189,76 @@ func GetContextSceneGroup(player *model.Player, groupId uint32) *model.SceneGrou
 	return sceneGroup
 }
 
-// RegLuaScriptLibFunc 注册LUA侧ScriptLib调用的Golang方法
+// RegLuaScriptLibFunc 注册 ScriptLib（Lua 侧通过 ScriptLib.XXX 调用的 Go 方法）
+//
+// 在 gdconf 加载完场景 Lua 后被调用一次 把 Go 函数挂到所有 Lua VM 的 ScriptLib 表里
+// 注册的 API 分两类：
+//   - 场景 LUA API: 30+ 个（实体查询/创建/group变量/区域/天气/操作台等）
+//   - 物件 LUA API: 5 个（SetGadgetState/GetGadgetState/GetContextGadgetConfigId/GetContextGroupId/DropSubfield）
+//
+// Lua 调用示例：ScriptLib.SetGroupVariableValue(context, "var_name", value)
+// 客户端见到的"宝箱开启"的服务端逻辑就是 Lua trigger 调 ScriptLib.SetGadgetState 实现
+// RegLuaScriptLibFunc 启动时注册 ScriptLib 全套 API（共 38 个，gdconf 加载完场景 Lua 后调一次）
+//
+// 注册的 Go 函数全部挂到 Lua VM 的 `ScriptLib` 全局表中
+// Lua 侧调用方式：`ScriptLib.SetGadgetState(context, configId, state)` 等
+//
+// **38 个 API 分类**（按业务域分组 按行号顺序）：
+//
+//	【上下文 / 调试】
+//	  GetEntityType                          解析 entityId 取实体类型（按客户端版本位移量不同）
+//	  GetQuestState                          查询玩家任务状态
+//	  PrintLog / PrintContextLog             Lua 调试日志（带玩家 uid）
+//
+//	【相机】
+//	  BeginCameraSceneLook                   CG 镜头锁定（**临时屏蔽** 触发客户端 bug）
+//
+//	【实体计数】
+//	  GetGroupMonsterCount                   当前 group 怪物数（trigger 用：全打完才出宝箱）
+//	  GetGroupMonsterCountByGroupId          按 groupId 查（跨 group 联动）
+//	  CheckRemainGadgetCountByGroupId        按 groupId 查物件剩余数
+//	  GetRegionEntityCount                   region 内实体数
+//
+//	【实体创建/销毁】
+//	  CreateMonster                          创建怪物（支持 delay 延迟创建）
+//	  CreateGadget                           创建物件
+//	  KillEntityByConfigId / KillGroupEntity 按 configId / group 杀实体
+//
+//	【物件状态】
+//	  GetGadgetStateByConfigId / SetGadgetStateByConfigId   按 configId 操作（场景 LUA 用）
+//	  ChangeGroupGadget                                     批量改 group 内物件
+//	  GetGadgetState / SetGadgetState                       按 ctx 操作（物件 LUA 用）
+//	  GetContextGadgetConfigId / GetContextGroupId          取上下文物件信息
+//
+//	【group 变量】（持久化在 model.SceneGroup.VariableMap 通常是任务进度/计数器）
+//	  GetGroupVariableValue / GetGroupVariableValueByGroup
+//	  SetGroupVariableValue / SetGroupVariableValueByGroup
+//	  ChangeGroupVariableValue / ChangeGroupVariableValueByGroup    （Set 是赋值 Change 是 +=）
+//
+//	【group suite 切换】（一个 group 不同状态：怪在/怪死/宝箱拿走）
+//	  RefreshGroup                          重新加载 group（按当前 variable 决定 suite）
+//	  AddExtraGroupSuite / RemoveExtraGroupSuite   叠加/移除 suite
+//
+//	【任务】
+//	  MarkPlayerAction                      标记玩家行为（用于任务条件）
+//	  AddQuestProgress                      推进任务进度（关键 API 走 TriggerQuest(LUA_NOTIFY)）
+//
+//	【其他】
+//	  ShowReminder                          客户端右上角提示
+//	  CreateGroupTimerEvent                 延迟 N 秒触发 TIMER_EVENT trigger
+//	  EnterWeatherArea / SetWeatherAreaState  天气区域控制
+//	  SetWorktopOptions / SetWorktopOptionsByGroupId        操作台选项设置
+//	  DelWorktopOption / DelWorktopOptionByGroupId          操作台选项移除
+//
+//	【物件 LUA 专用】（在物件本地 Lua 脚本里调用 GadgetLuaConfig.LuaState）
+//	  SetGadgetState / GetGadgetState
+//	  GetContextGadgetConfigId / GetContextGroupId
+//	  DropSubfield                          掉落子物品（如打破破坏物的掉落）
+//
+// **调用约定**：所有 ScriptLib 函数都是单参数 `*lua.LState` 返回 `int`（压栈数量）
+//
+//	入参第 1 个通常是 `context table`（含 uid/groupId 等）
+//	出参用 luaState.Push(LValue) 失败约定返回 -1
 func RegLuaScriptLibFunc() {
 	// 调用场景LUA方法
 	gdconf.RegScriptLibFunc("GetEntityType", GetEntityType)
@@ -216,9 +315,19 @@ type CommonLuaTableParam struct {
 	SubfieldName string `json:"subfield_name"`
 }
 
+// GetEntityType ScriptLib API: 解析 entityId 取实体类型（按客户端版本不同位移量不同）
+//
+// EntityId 编码：高位是 entityType 低位是计数器（详见 game_world_manager.go:GetNextWorldEntityId）
+//   - v6.5+: entityType 占 11 bit (>>21)
+//   - v6.0+: entityType 占 10 bit (>>22)
+//   - <6.0:  entityType 占 8 bit  (>>24)
+//
+// 通过 SELF.ClientVersion 决定位移量 这就是为什么 Lua 必须在主循环单线程内调用（依赖全局 SELF）
 func GetEntityType(luaState *lua.LState) int {
 	entityId := luaState.ToInt(1)
-	if SELF.ClientVersion >= 600 {
+	if SELF.ClientVersion >= 650 {
+		luaState.Push(lua.LNumber(entityId >> 21))
+	} else if SELF.ClientVersion >= 600 {
 		luaState.Push(lua.LNumber(entityId >> 22))
 	} else {
 		luaState.Push(lua.LNumber(entityId >> 24))
@@ -270,6 +379,9 @@ func PrintContextLog(luaState *lua.LState) int {
 	return 0
 }
 
+// BeginCameraSceneLook ScriptLib API: 开始相机过场（CG 镜头锁定）
+// **临时屏蔽**：解锁风之翼任务调这个会触发未知客户端 bug 作者用 luaState.Push(0) 提前返回绕过
+// 后续代码不可达 但保留备用（可能未来修复后启用）
 func BeginCameraSceneLook(luaState *lua.LState) int {
 	// TODO 由于解锁风之翼任务相关原因暂时屏蔽
 	luaState.Push(lua.LNumber(0))
@@ -516,6 +628,10 @@ func MarkPlayerAction(luaState *lua.LState) int {
 	return 1
 }
 
+// AddQuestProgress ScriptLib API: Lua 侧推进任务进度
+// Lua 通过 ScriptLib.AddQuestProgress(context, "complexParam") 触发 LUA_NOTIFY 任务条件
+// 任务配置 finishCond.ComplexParam 与 Lua 传的字符串相等 → 推进任务进度
+// 这是 Lua trigger 与 quest 系统的桥梁（如打死任务怪 → Lua trigger 调此函数 → quest 进度推进）
 func AddQuestProgress(luaState *lua.LState) int {
 	ctx, ok := luaState.Get(1).(*lua.LTable)
 	if !ok {

@@ -16,8 +16,34 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
+// 战斗同步 模块
+//
+// 原神战斗采用 Frame Sync（动作同步）模型 而非状态同步：
+//   - 客户端把 ability/combat 操作打包成 InvokeEntry 走 UnionCmdNotify 发服务端
+//   - 服务端按 ForwardType 分流转发给世界内其他玩家 让其他客户端同步执行相同动作
+//   - 服务端自身**不做伤害计算和反作弊校验**（因为 Ability 系统大部分未实现）
+//
+// 主要职责：
+//   - UnionCmdNotify: 解包客户端聚合包 拆出多个 InvokeEntry 分别走 DoForward
+//   - CombatInvocationsNotify: 战斗事件通知（被击中/移动/动画状态等）
+//   - AbilityInvocationsNotify: 能力事件通知（技能/buff等）
+//   - ClientAbilityInitFinishNotify/ClientAbilityChangeNotify: 能力初始化/变更
+//   - 一系列Evt*Notify: 子弹/聚焦/创建物件等子事件通知
+//   - SceneBlockAoiPlayerMove/AiWorldAoiPlayerMove: 玩家移动后的 AOI 更新
+//
+// 关键工具：DoForward 泛型函数 按 ForwardType 把 InvokeEntry 分流到对应广播范围
+
 var cmdProtoMap *cmd.CmdProtoMap = nil
 
+// DoForward 战斗事件分流转发（核心广播逻辑）
+//
+// 客户端的每个 InvokeEntry 带 ForwardType 字段 表示要发给谁：
+//   - FORWARD_TO_ALL: 场景内所有玩家（含自己） → SendToSceneA(exceptUid=0)
+//   - FORWARD_TO_ALL_EXCEPT_CUR: 场景内除自己外所有玩家 → SendToSceneA(exceptUid=自己)
+//   - FORWARD_TO_HOST: 仅发给世界房主 → SendToWorldH
+//
+// AI世界特殊：用 SendToSceneACV 限定客户端版本（PUBG玩法的子弹模拟需要）+ AOI格子过滤
+// 此外修复一个 AOI bug：发送前清掉已不在世界但残留在 AOI 格子里的玩家引用
 func DoForward[IET model.InvokeEntryType](player *model.Player, invokeHandler *model.InvokeHandler[IET],
 	cmdId uint16, newNtf pb.Message, forwardField string,
 	srcNtf pb.Message, copyFieldList []string) {
@@ -86,6 +112,11 @@ func DoForward[IET model.InvokeEntryType](player *model.Player, invokeHandler *m
 	}
 }
 
+// UnionCmdNotify 聚合消息处理
+//
+// 客户端为减少网络开销 会把多个高频消息（移动/动画/ability）打包成 UnionCmdNotify 批量发送
+// 实际是个空壳：服务端接收时上层 RouteManager 已经把内层消息单独 Decode 转发到对应 handler
+// 这里仅在玩家进场完成后 把累积在 InvokeHandler 里的 entry 批量转发给其他玩家然后清空
 func (g *Game) UnionCmdNotify(player *model.Player, payloadMsg pb.Message) {
 	ntf := payloadMsg.(*proto.UnionCmdNotify)
 	_ = ntf
@@ -102,6 +133,17 @@ func (g *Game) UnionCmdNotify(player *model.Player, payloadMsg pb.Message) {
 	player.AbilityInvokeHandler.Clear()
 }
 
+// CombatInvocationsNotify 战斗事件通知（核心战斗入口）
+//
+// 客户端的战斗事件按 ArgumentType 分类：
+//   - COMBAT_EVT_BEING_HIT: 实体被击中（最关键 → handleEvtBeingHit 扣血）
+//   - ENTITY_MOVE: 实体移动（玩家/怪物/物件位置同步 → handleEntityMove 触发AOI更新+天气区域检查）
+//   - ANIMATOR_PARAMETER_CHANGED / ANIMATOR_STATE_CHANGED: 动画状态变化（仅解析不处理）
+//
+// 所有 entry 都会被加入 player.CombatInvokeHandler 等 UnionCmdNotify 批量转发
+// 注释里那段"众里寻他千百度"是开发者自嘲调试动画问题的发现：
+//
+//	只要服务端转发了 MOTION_NOTIFY 或 MOTION_FIGHT 中任意一个 客户端动画就会被打断
 func (g *Game) CombatInvocationsNotify(player *model.Player, payloadMsg pb.Message) {
 	ntf := payloadMsg.(*proto.CombatInvocationsNotify)
 	if player.SceneLoadState != model.SceneEnterDone {
@@ -221,6 +263,18 @@ func (g *Game) handleEvtBeingHit(player *model.Player, scene *Scene, hitInfo *pr
 	}
 }
 
+// handleEntityMove 实体移动处理（玩家移动是高频消息 处理逻辑很重）
+//
+// 玩家角色实体移动时：
+//  1. 同步队伍中所有 worldAvatar 实体（包括非出战的）+ 武器实体的位置
+//  2. 单人/多人世界：异步加载新block + 调 SceneBlockAoiPlayerMove 处理 AOI 变化
+//     · 跨越block格子时才触发 LoadSceneBlockAsync 期间不冻结玩家移动
+//  3. AI 世界：调 AiWorldAoiPlayerMove 处理 AOI 变化（PUBG格子 120×12×120）
+//  4. 触发 SceneWeatherAreaCheck 检查天气区域是否变化
+//  5. 安全位置（state=STANDBY/WALK/RUN/DASH 等）才更新 player.Pos（防止飞天/卡墙后传送）
+//  6. 体力消耗（ImmediateStamina）+ 坠落撞击扣血（速度差>20视为坠落）
+//
+// 物件实体移动时：仅载具会处理体力（划船耗体力）+ 销毁请求
 func (g *Game) handleEntityMove(player *model.Player, world *World, scene *Scene, entityId uint32, pos, rot *model.Vector, force bool, moveInfo *proto.EntityMoveInfo) {
 	entity := scene.GetEntity(entityId)
 	if entity == nil {
@@ -336,6 +390,18 @@ func (g *Game) handleEntityMove(player *model.Player, world *World, scene *Scene
 	}
 }
 
+// SceneBlockAoiPlayerMove 普通世界玩家跨格子的 AOI 处理（不涉及 AI 世界）
+//
+// 计算并处理 4 类变化：
+//  1. 卸载 group：旧位置邻接但新位置不邻接的 group → RemoveSceneGroup
+//     · 多人世界还要确认其他玩家也都离开了这个 group 才能卸
+//  2. 加载 group：新位置邻接但旧位置不邻接的 group → AddSceneGroup
+//  3. 实体消失：旧视野有但新视野没有的实体 → 给自己发 VISION_MISS
+//     · 角色实体特殊：双向消失（自己看不到对方 + 对方也看不到自己）
+//  4. 实体出现：新视野有但旧视野没有的实体 → 给自己发 VISION_MEET
+//     · 角色实体特殊：双向出现
+//
+// 最后调 SceneRegionTriggerCheck 检测玩家是否进入/离开 Lua 触发区域
 func (g *Game) SceneBlockAoiPlayerMove(player *model.Player, world *World, scene *Scene, oldPos *model.Vector, newPos *model.Vector, avatarEntityId uint32) {
 	// 加载和卸载的group
 	oldNeighborGroupMap := g.GetNeighborGroup(player.GetSceneId(), oldPos)
@@ -431,6 +497,15 @@ func (g *Game) SceneBlockAoiPlayerMove(player *model.Player, world *World, scene
 	g.SceneRegionTriggerCheck(player, oldPos, newPos, avatarEntityId)
 }
 
+// AiWorldAoiPlayerMove AI世界（PUBG玩法）玩家跨格子的 AOI 处理
+//
+// 与普通世界 SceneBlockAoiPlayerMove 区别：
+//   - AI世界用 3D 格子（120×12×120）而非 2D（普通世界 1024×1024）
+//   - 不卸载/加载 group（因为 AI 世界没用 group 系统 实体是动态创建的）
+//   - 重点是处理玩家间互相可见性：跨格子时通知双方对方角色实体的出现/消失
+//   - 同时把玩家本身从老格子的 AOI 对象列表中移除 加到新格子
+//
+// 这套机制让 AI 世界（无 4 人上限）能支持几十/上百人同屏 仅渲染附近格子的玩家
 func (g *Game) AiWorldAoiPlayerMove(player *model.Player, world *World, scene *Scene, oldPos *model.Vector, newPos *model.Vector) {
 	aiWorldAoi := world.GetAiWorldAoi()
 	oldGid := aiWorldAoi.GetGidByPos(float32(oldPos.X), float32(oldPos.Y), float32(oldPos.Z))
@@ -655,6 +730,20 @@ func (g *Game) ClientAbilityChangeNotify(player *model.Player, payloadMsg pb.Mes
 	}
 }
 
+// handleAbilityInvoke 处理单个 AbilityInvokeEntry（按 ArgumentType 分支）
+//
+// ArgumentType 字符串大致分 4 类：
+//   - 含 "ACTION": 能力动作（释放技能、扣体力等）→ entity.AbilityAction(action)
+//     · 当前仅实现 6 种 AbilityAction（详见 game_world_scene.go AvatarSkillStart/HealHP 等）
+//   - 含 "MIXIN": 持续性能力混入 → entity.AbilityMixin(mixin)
+//     · 当前仅实现 1 种 CostStaminaMixin（持续扣体力 如长按E）
+//   - 含 "META": 元能力操作（添加能力/添加modifier/覆盖参数等）→ 维护实体的 abilityMap/modifierMap
+//     · ABILITY_META_ADD_NEW_ABILITY: 给实体加新能力
+//     · ABILITY_META_MODIFIER_CHANGE: modifier 增删
+//     · ABILITY_META_REINIT_OVERRIDEMAP / OVERRIDE_PARAM: 覆盖能力参数（dynamicFloat 求值用）
+//     · ABILITY_META_GLOBAL_FLOAT_VALUE: 全局动态值（如角色等级影响的伤害系数）
+//
+// **重要**：项目 Ability 系统大部分未实现 这里只是骨架 实际伤害计算/护盾/元素反应都没有
 func (g *Game) handleAbilityInvoke(player *model.Player, entry *proto.AbilityInvokeEntry) {
 	world := WORLD_MANAGER.GetWorldById(player.WorldId)
 	if world == nil {
@@ -917,6 +1006,9 @@ func (g *Game) EvtBulletDeactiveNotify(player *model.Player, payloadMsg pb.Messa
 	g.SendToSceneA(scene, cmd.EvtBulletDeactiveNotify, player.ClientSeq, ntf, 0)
 }
 
+// EvtBulletHitNotify 子弹命中通知
+// 客户端报告"我的子弹打到了某个实体" 服务端转发给场景内其他玩家
+// 触发 PluginEventIdEvtBulletHit 让 PUBG 插件介入做物理引擎命中判定+伤害结算
 func (g *Game) EvtBulletHitNotify(player *model.Player, payloadMsg pb.Message) {
 	ntf := payloadMsg.(*proto.EvtBulletHitNotify)
 	if player.SceneLoadState != model.SceneEnterDone {
@@ -954,6 +1046,9 @@ func (g *Game) EvtBulletMoveNotify(player *model.Player, payloadMsg pb.Message) 
 	g.SendToSceneA(scene, cmd.EvtBulletMoveNotify, player.ClientSeq, ntf, 0)
 }
 
+// EvtCreateGadgetNotify 客户端创建物件通知（如玩家拉弓射出箭矢、放风元素技能产生的元素球）
+// 创建 GadgetClientEntity（客户端发起的物件）+ 广播 SceneEntityAppearNotify 给场景内玩家
+// 触发 PluginEventIdEvtCreateGadget 让 PUBG 插件接管：判断是否箭矢子弹 → 送物理引擎模拟轨迹+命中判定
 func (g *Game) EvtCreateGadgetNotify(player *model.Player, payloadMsg pb.Message) {
 	ntf := payloadMsg.(*proto.EvtCreateGadgetNotify)
 	if player.SceneLoadState != model.SceneEnterDone {

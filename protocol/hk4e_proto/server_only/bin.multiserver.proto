@@ -1,3 +1,5 @@
+// 社交性质的玩法存档
+
 syntax = "proto3";
 
 package proto;

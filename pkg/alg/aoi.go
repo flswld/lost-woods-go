@@ -4,6 +4,27 @@ import (
 	"math"
 )
 
+// AOI（Area of Interest）3D 格子管理 - 项目场景视野同步核心
+//
+// 用途：
+//   - 大世界场景区块加载（sceneBlockAoi 1024×1024 m 格子）
+//   - AI 世界 PUBG 玩法实体视野（120×12×120 m 格子）
+//   - 普通世界用 vision 距离 + AOI 双重过滤
+//
+// 数据结构：
+//   - 把场景按格子大小切分成 numX×numY×numZ 个 3D 格子
+//   - 每个格子是一个 Grid 对象 含 gid + 对象集合
+//   - gid 编码: y*(numX*numZ) + z*numX + x（按 xzy 顺序）
+//
+// 关键查询：
+//   - GetGidByPos(x,y,z): 定位某点在哪个格子
+//   - GetSurrGridListByGid(gid, level): 取周围 level 圈格子（视野扩展用）
+//   - GetObjectListByGid: 取格子内所有对象
+//   - AddObjectToGridByPos / RemoveObjectFromGridByPos: 增删对象
+//
+// delay=true 时不预创建所有格子（按需创建 节省内存）
+//   AI 世界 PUBG 用 delay=false 预创建（实体频繁移动 避免运行时分配）
+
 // AoiManager aoi管理模块
 type AoiManager struct {
 	// 区域边界坐标

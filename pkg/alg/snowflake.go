@@ -5,7 +5,22 @@ import (
 	"time"
 )
 
-// 雪花算法的基本实现
+// 雪花算法 ID 生成器（Twitter Snowflake 简化版）
+//
+// 项目用途：
+//   - GS 启动时创建一个 SnowflakeWorker（workerId = 0~1023）
+//   - 用于生成 World id / GameObjectGuid / EnterSceneToken / 角色/武器/圣遗物 GUID 等
+//   - 保证全集群唯一（按 workerId 分配避免冲突）
+//
+// 起始时间 epoch: 2022-07-07 07:07:07（项目作者选择的纪念日）
+//   按此可用约 68 年（直到 2090 年）
+//   **绝对不能改 epoch**：改了会与历史 ID 冲突
+//
+// 容量：每毫秒每个节点最多 4096 个 ID（足以应付任何业务场景）
+//
+// 时钟回拨保护：
+//   - 回拨 ≤ 1 秒：自旋等待
+//   - 回拨 > 1 秒：返回 -1（避免长时间阻塞）
 
 // snowflake ID 是一个64位的int数据 由四部分组成
 // A-B-C-D

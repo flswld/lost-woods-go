@@ -1,3 +1,5 @@
+// 循环营地玩法
+
 syntax = "proto3";
 
 package proto;
@@ -6,23 +8,25 @@ import "define.proto";
 
 option go_package = "./;proto";
 
+// 循环营地进度状态
 enum BlossomScheduleState {
-    BLOSSOM_SCHEDULE_NONE = 0;
-    BLOSSOM_SCHEDULE_INIT = 1;
-    BLOSSOM_SCHEDULE_IN_PROGRESS = 2;
-    BLOSSOM_SCHEDULE_REWARD = 3;
+    BLOSSOM_SCHEDULE_NONE = 0;        // 机关未生成，临时状态
+    BLOSSOM_SCHEDULE_INIT = 1;        // 机关未开启
+    BLOSSOM_SCHEDULE_IN_PROGRESS = 2; // 机关开启，玩法进行中
+    BLOSSOM_SCHEDULE_REWARD = 3;      // 玩法结束，领奖状态
 }
 
+// 循环营地简要信息
 message BlossomBriefInfo {
-    uint32 refresh_id = 13;
-    uint32 reward_id = 5;
-    uint32 city_id = 10;
+    uint32 refresh_id = 13;     // 刷新ID
+    uint32 reward_id = 5;       // 用于客户端展示
+    uint32 city_id = 10;        // 城市ID
     uint32 resin = 11;
     uint32 state = 7;
     bool is_guide_opened = 1;
-    uint32 monster_level = 8;
-    uint32 circle_camp_id = 15;
-    Vector pos = 12;
+    uint32 monster_level = 8;   // 怪物等级
+    uint32 circle_camp_id = 15; // 营地ID
+    Vector pos = 12;            // 坐标
     uint32 scene_id = 9;
 }
 
@@ -36,7 +40,7 @@ message GetBlossomBriefInfoListReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    repeated uint32 city_id_list = 4;
+    repeated uint32 city_id_list = 4; // city_id列表
 }
 
 message GetBlossomBriefInfoListRsp {
@@ -79,6 +83,7 @@ message WorldOwnerBlossomBriefInfoNotify {
     repeated BlossomBriefInfo brief_info_list = 13;
 }
 
+// 循环营地进度信息
 message BlossomScheduleInfo {
     uint32 progress = 13;
     uint32 state = 10;

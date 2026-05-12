@@ -9,6 +9,11 @@ const (
 	ITEM_ID_LEGENDARY_KEY = 207 // 传说任务钥匙
 	ITEM_ID_HOME_COIN     = 204 // 洞天宝钱
 	ITEM_ID_PLAYER_EXP    = 102 // 冒险阅历
+	// 抽卡相关物品
+	ITEM_ID_STARGLITTER      = 221 // 无主的星辉（抽到重复 4/5 星给）
+	ITEM_ID_STARDUST         = 222 // 无主的星尘（抽到非重复或低星给）
+	ITEM_ID_INTERTWINED_FATE = 223 // 纠缠之缘（限定池消耗）
+	ITEM_ID_ACQUAINT_FATE    = 224 // 相遇之缘（常驻池消耗）
 	// 武器强化物品
 	ITEM_ID_WEAPON_UPGRADE_MAGIC  = 104013 // 精锻用魔矿
 	ITEM_ID_WEAPON_UPGRADE_GOOD   = 104012 // 精锻用良矿

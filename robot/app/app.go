@@ -22,8 +22,22 @@ import (
 	"github.com/flswld/halo/logger"
 )
 
-var APPVERSION string
+// Robot 服务启动入口
+//
+// 与其他服务不同：robot 不向 Node 注册（自己是客户端不是服务端）
+// 直接连 dispatch 走完整客户端登录链路
+//
+// 两种模式：
+//   - 单账号（DosEnable=false）：仅用 Account 配置一个账号登录 用于开发测试
+//   - 压测（DosEnable=true）：起 DosTotalNum 个虚拟账号
+//     · 账号名 = Account+i（如 robot0, robot1, ..., robot999）
+//     · 每批 DosBatchNum 个账号并发启动 间隔 10ms 模拟真实登录波动
+//     · DosLoopLogin=true 时每个虚拟客户端登入后立即重连 模拟"用户频繁重连"压力
 
+var APPVERSION string // 编译时注入
+
+// Run robot 主入口（cmd/robot/main.go 调用）
+// 启动 runRobot goroutine 然后阻塞等信号
 func Run(ctx context.Context) error {
 	logger.InitLogger(&logger.Config{
 		AppName:      "robot",
@@ -65,6 +79,12 @@ func Run(ctx context.Context) error {
 	}
 }
 
+// runRobot 决定是单机模式还是压测模式
+//
+// 压测模式实现：
+//   - 每批 dosBatchNum 个虚拟账号同时登录
+//   - WaitGroup 等本批全部登录完才启动下一批（避免短时太多 RSA 解密 CPU 飙满）
+//   - 批间隔 10ms（如 batch=10 总数=1000 → 1000/10=100 批 → 总耗时约 1 秒铺满）
 func runRobot() {
 	if config.GetConfig().Hk4eRobot.DosEnable {
 		dosBatchNum := int(config.GetConfig().Hk4eRobot.DosBatchNum)
@@ -82,6 +102,14 @@ func runRobot() {
 	}
 }
 
+// httpLogin 单个账号的完整登录流程
+//
+// 步骤：
+//  1. GetDispatchInfo: 一/二级 dispatch 拿 Gate 地址
+//  2. AccountLogin: SDK 登录拿 ComboToken（apiLogin → apiVerify → v2Login）
+//  3. 起 goroutine 调 gateLogin（支持 DosLoopLogin 循环登录）
+//
+// DosEnable 时把 wg.Done() 放在 defer 等所有账号 dispatch 都成功才返回
 func httpLogin(account string, wg *sync.WaitGroup) {
 	defer func() {
 		if config.GetConfig().Hk4eRobot.DosEnable {
@@ -115,6 +143,18 @@ func httpLogin(account string, wg *sync.WaitGroup) {
 	}()
 }
 
+// gateLogin Gate KCP 握手 + 发 PlayerLoginReq 进游戏服
+//
+// 处理：
+//  1. login.GateLogin: KCP 握手 + GetPlayerToken 流程（密钥协商）
+//  2. 计算 ClientVersionHash: sha1(ClientVersion + ServerRandomKey + "mhy2020")
+//     · "mhy2020" 是米哈游内部固定盐值（业内已知）
+//     · 服务端用同样算法验证客户端版本一致性
+//  3. 发 PlayerLoginReq 含一系列 hardcode 字段：
+//     · Checksum: 客户端 IL2CPP 校验和（伪造的 不会真校验）
+//     · ClientDataVersion: 11793813（3.2 版本号）
+//     · SecurityLibraryMd5: 防作弊库 MD5
+//  4. 进 client.Logic 主循环
 func gateLogin(account string, dispatchInfo *login.DispatchInfo, accountInfo *login.AccountInfo) {
 	session, err := login.GateLogin(dispatchInfo, accountInfo, config.GetConfig().Hk4eRobot.KeyId)
 	if err != nil {

@@ -4,6 +4,22 @@ import (
 	"github.com/flswld/halo/logger"
 )
 
+// 物品配置加载器 - 4 表合 1（最复杂的 _data.go 之一）
+//
+// 物品分四大类 都用同一个 ItemData 结构体存储（按 Type 字段区分）：
+//   - MaterialData (类型=1): 普通材料/食物/任务道具
+//   - WeaponData (类型=2): 武器（含基础属性 + 词条 + 突破曲线）
+//   - ReliquaryData (类型=3): 圣遗物（含主属性词库 + 副词条数量）
+//   - FurnitureData (类型=4): 家具（家园用 项目未实现）
+//
+// 加载策略（loadItemData）：
+//   - 同一 itemId 可能在 4 个 CSV 中各有一行
+//   - 合并到统一 ItemData 结构（按 Type 取对应字段）
+//   - 这是为什么 ItemData 有这么多字段（不同类型用不同部分）
+//
+// ItemUse 字段：物品使用时的效果（最多 4 个 useOption）
+//   详见 player_item.go UseItem 处理 8 种 UseOption
+
 type ItemUse struct {
 	UseOption int32
 	UseParam  []string

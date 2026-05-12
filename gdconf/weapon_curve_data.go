@@ -4,6 +4,16 @@ import (
 	"github.com/flswld/halo/logger"
 )
 
+// 武器曲线配置 - 稀疏数据典型例子
+//
+// 武器属性曲线决定武器随等级成长的数值变化（攻击力/精炼属性等）
+// CSV 表有 18 个曲线列（[曲线]1~18 类型/运算/值）但每行实际只用其中几个
+//
+// 加载策略：
+//   - 读出所有 18 列字段
+//   - 在 loadWeaponCurveData 中过滤非零项加入 CurveList（运行时只看有效列）
+//   - 二级索引：等级 → CurveType → 曲线值（PROMOTE_ATK 等）
+
 // WeaponCurveData 武器曲线配置表
 type WeaponCurveData struct {
 	Level int32 `csv:"等级"`

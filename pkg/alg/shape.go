@@ -4,7 +4,20 @@ import (
 	"math"
 )
 
-// 空间形状检测
+// 空间形状容器检测 - 用于 Lua trigger 区域判定
+//
+// 4 种基本形状（与原神 Region 配置一致）：
+//   - Sphere: 球形（中心+半径）
+//   - Cubic: 立方体（中心+三向尺寸）
+//   - Cylinder: 圆柱（中心+半径+高度）
+//   - Polygon: 多边形柱体（中心+底面顶点+高度）
+//
+// Shape.Contain(point): 判断点是否在区域内
+//   多个 RegionShape 组合通过 region 数组（任一形状包含即返回 true）
+//
+// 调用方：lua_trigger.go SceneRegionTriggerCheck
+//   玩家移动时检测是否进入/离开 region 触发对应 Lua 函数
+//
 // 默认为左手坐标系 Y轴向上 兼容Unity3D
 
 // Shape 形状

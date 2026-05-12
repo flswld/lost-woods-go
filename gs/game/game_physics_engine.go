@@ -9,14 +9,30 @@ import (
 	"github.com/flswld/halo/logger"
 )
 
+// 子弹物理引擎 - PUBG 弓箭对狙的核心
+//
+// 这是一个简化版的 3D 物理引擎 仅用于 AI 世界的 PUBG 玩法：
+//   - 子弹按"重力 + 阻力"运动模型模拟（不考虑反弹/穿透/材质）
+//   - 角色简化为长方体碰撞箱（半径0.5 高度2.0 中心点上偏 1.0）
+//   - 每 50ms tick 一次 推进所有刚体位置 + AABB 包围盒碰撞检测
+//   - 命中后销毁子弹刚体 调 PluginPubg.PubgHit 走 PUBG 伤害计算
+//
+// 启用条件：仅 AI 世界的 World 才有 bulletPhysicsEngine（普通世界 = nil）
+//
+// 简化代价：
+//   - 不考虑场景障碍物（子弹会穿墙）
+//   - 不考虑角色姿态/朝向（角色被简化为静态包围盒）
+//   - 不考虑空气阻力/温度等真实物理因素
+//   - PITCH_ANGLE_OFFSET = 3 度补偿（客户端实际朝向比抛物线略低）
+
 const (
-	AVATAR_RADIUS      = 0.5
-	AVATAR_HEIGHT      = 2.0
-	AVATAR_Y_OFFSET    = 1.0
-	ACC                = -5.0
-	DRAG               = 0.01
-	PITCH_ANGLE_OFFSET = 3.0
-	INIT_SPEED         = 50.0
+	AVATAR_RADIUS      = 0.5  // 角色碰撞半径（XZ 平面）
+	AVATAR_HEIGHT      = 2.0  // 角色高度（Y 方向）
+	AVATAR_Y_OFFSET    = 1.0  // 角色中心点 Y 偏移（角色脚下到几何中心的距离）
+	ACC                = -5.0 // 重力加速度（负值表示向下）
+	DRAG               = 0.01 // 空气阻力系数
+	PITCH_ANGLE_OFFSET = 3.0  // 子弹俯仰角偏移补偿（客户端朝向校正）
+	INIT_SPEED         = 50.0 // 子弹初始速度
 )
 
 // RigidBody 刚体
@@ -77,6 +93,17 @@ func (p *PhysicsEngine) ShowAvatarCollider() {
 	}
 }
 
+// Update 物理引擎主循环（每 tick 调用一次 由 TICK_MANAGER 全局 tick 触发）
+//
+// 处理所有刚体：
+//  1. 越界检查：超出 AI 世界范围 → 销毁
+//  2. 阻力作用：v -= drag*v*dt（每个轴向独立计算 注意速度衰减不会反向）
+//  3. 重力作用：vy += -5*dt（仅Y轴 直接减重力加速度）
+//  4. 速度作用于位移：pos += v*dt（线性插值）
+//  5. 碰撞检测：Collision 函数 AABB 包围盒判定
+//  6. 命中 → 加入 hitList 销毁刚体
+//
+// pathTracing=true 时（GM 调试用）每帧创建一个红色物件做轨迹可视化
 func (p *PhysicsEngine) Update(now int64) []*RigidBody {
 	hitList := make([]*RigidBody, 0)
 	dt := float32(now-p.lastUpdateTime) / 1000.0
@@ -132,6 +159,21 @@ func (p *PhysicsEngine) Update(now int64) []*RigidBody {
 	return hitList
 }
 
+// Collision AABB 包围盒碰撞检测（线段 vs 长方体）
+//
+// 算法：把子弹一帧内的运动看作一条线段（oldPos→newPos） 与每个角色的包围盒做相交测试
+// 三轴独立判定：线段在 X/Y/Z 三个轴上的投影必须都与包围盒投影相交
+//   - lineMin/lineMax: 线段端点在某轴上的最小/最大值
+//   - shapeMin/shapeMax: 包围盒在某轴上的最小/最大值
+//   - lineMax < shapeMin || lineMin > shapeMax → 不相交
+//
+// 跳过自己（avatarEntityId 相同的玩家）防止自伤
+// 返回命中的角色实体 id（0 表示无命中）
+//
+// 限制：这是简化的 AABB 测试 不是真正的"线段与立方体相交"算法
+//
+//	实际上只检查"线段包围盒与立方体重叠" 在子弹长距离飞行时可能误判
+//	但对 50 米内的弓箭对射够用了
 func (p *PhysicsEngine) Collision(sceneId uint32, avatarEntityId uint32, oldPos *alg.Vector3, newPos *alg.Vector3) uint32 {
 	scene := p.world.GetSceneById(sceneId)
 	world := scene.GetWorld()
@@ -197,6 +239,18 @@ func (p *PhysicsEngine) IsRigidBody(entityId uint32) bool {
 	return exist
 }
 
+// CreateRigidBody 创建子弹刚体（弓箭从弓上射出时调用）
+//
+// 参数 pitchAngle/yawAngle 来自客户端 EvtCreateGadgetNotify 的 InitEulerAngles
+//   - pitchAngle: 俯仰角（仰头为正 低头为负）
+//   - yawAngle: 偏航角（玩家朝向）
+//
+// 由角度算出三轴速度分量：
+//   - vy = sin(pitch) × initSpeed（Y 分量按俯仰角投影）
+//   - vxz = cos(pitch) × initSpeed（XZ 平面分量）
+//   - vx = sin(yaw) × vxz, vz = cos(yaw) × vxz（XZ 分量按偏航角分解）
+//
+// 加 pitchAngleOffset=3 度补偿客户端瞄准与服务端轨迹的差异
 func (p *PhysicsEngine) CreateRigidBody(entityId, avatarEntityId, sceneId uint32, x, y, z float32, pitchAngle, yawAngle float32) {
 	pitchAngle += p.pitchAngleOffset
 	vy := math.Sin(float64(pitchAngle)/360.0*2*math.Pi) * float64(p.initSpeed)

@@ -22,17 +22,34 @@ import (
 	"github.com/flswld/halo/protocol/kcp"
 )
 
-// 网络连接管理
+// 网络连接管理 - gate 服务的总控制器
+//
+// 主要职责：
+//   1. KCP/TCP 监听 + 客户端连接接受
+//   2. Session 池管理（按 sessionId 和 userId 双索引）
+//   3. 全局玩家在线表（globalGsOnlineMap）+ 最小负载 GS 选择
+//   4. 停服管理（StopServerInfo + WhiteList）
+//   5. 协议密钥（RSA + dispatch ec2b）
+//   6. ClientProtoProxy 实例（多版本部署时初始化）
+//
+// 后台 goroutine 集群：
+//   - acceptHandle: KCP/TCP 接受新连接
+//   - forwardServerMsgToClientHandle: 服务端 → 客户端转发（单 goroutine 处理所有会话）
+//   - autoSyncGlobalGsOnlineMap: 每 15s 同步全局在线表
+//   - autoSyncMinLoadServerAppid: 每 15s 选最小负载 GS / Multi
+//   - autoSyncStopServerInfo: 同步停服信息
+//   - autoSyncWhiteList: 同步白名单
+//   - kcpNetInfo: 每分钟打印网络统计
 
 const (
-	ConnEstFreqLimit      = 100        // 每秒连接建立频率限制
-	RecvPacketFreqLimit   = 1000       // 客户端上行每秒发包频率限制
-	SendPacketFreqLimit   = 1000       // 服务器下行每秒发包频率限制
-	PacketMaxLen          = 343 * 1024 // 最大应用层包长度
+	ConnEstFreqLimit      = 100        // 每秒连接建立频率上限（防恶意连接攻击）
+	RecvPacketFreqLimit   = 1000       // 客户端上行每秒发包频率上限
+	SendPacketFreqLimit   = 1000       // 服务器下行每秒发包频率上限
+	PacketMaxLen          = 343 * 1024 // 最大应用层包长度（约 343KB）
 	ConnRecvTimeout       = 30         // 收包超时时间 秒
 	ConnSendTimeout       = 10         // 发包超时时间 秒
-	MaxClientConnNumLimit = 1000       // 最大客户端连接数限制
-	TcpNoDelay            = true       // 是否禁用tcp的nagle
+	MaxClientConnNumLimit = 1000       // 单 gate 最大客户端连接数
+	TcpNoDelay            = true       // 是否禁用 tcp 的 nagle 算法（实时性 vs 带宽）
 )
 
 var CLIENT_CONN_NUM int32 = 0 // 当前客户端连接数
@@ -48,33 +65,34 @@ type ConnEvent struct {
 	EventMessage any
 }
 
+// ConnManager 网络连接管理器（gate 主结构 全局唯一）
 type ConnManager struct {
-	db                      *dao.Dao
-	discoveryClient         *rpc.DiscoveryClient // 节点服务器rpc客户端
-	messageQueue            *mq.MessageQueue     // 消息队列
-	globalGsOnlineMap       map[uint32]string    // 全服玩家在线表
-	globalGsOnlineMapLock   sync.RWMutex
-	minLoadGsServerAppId    string
-	minLoadMultiServerAppId string
-	stopServerInfo          *api.StopServerInfo
-	whiteList               *api.GetWhiteListRsp
+	db                      *dao.Dao             // 账号 DB（OpenId ↔ uid 映射 + 分布式锁）
+	discoveryClient         *rpc.DiscoveryClient // 服务发现 RPC 客户端（连 Node）
+	messageQueue            *mq.MessageQueue     // 消息队列（NATS + TCP 直连双通道）
+	globalGsOnlineMap       map[uint32]string    // 全服玩家在线表 uid → gsAppId
+	globalGsOnlineMapLock   sync.RWMutex         // 全局在线表锁（多 goroutine 读写）
+	minLoadGsServerAppId    string               // 当前最小负载 GS 的 appId（每 15s 更新）
+	minLoadMultiServerAppId string               // 当前最小负载 Multi 的 appId
+	stopServerInfo          *api.StopServerInfo  // 停服信息（停服时间窗 + IP 白名单）
+	whiteList               *api.GetWhiteListRsp // 白名单（停服期间允许的玩家）
 	// 会话
-	sessionIdCounter uint32
-	sessionMap       map[uint32]*Session
-	sessionUserIdMap map[uint32]*Session
+	sessionIdCounter uint32              // 会话 id 自增计数器
+	sessionMap       map[uint32]*Session // sessionId → Session
+	sessionUserIdMap map[uint32]*Session // userId → Session（同一 uid 仅一个会话）
 	sessionMapLock   sync.RWMutex
 	// 事件
-	createSessionChan        chan *Session
-	destroySessionChan       chan *Session
-	connEventChan            chan *ConnEvent
-	reLoginRemoteKickRegChan chan *RemoteKick
+	createSessionChan        chan *Session    // 新会话注册到 forwardServerMsgToClient
+	destroySessionChan       chan *Session    // 会话销毁
+	connEventChan            chan *ConnEvent  // 连接事件（Est/Close）
+	reLoginRemoteKickRegChan chan *RemoteKick // 跨服顶号注册
 	// 协议
-	serverCmdProtoMap *cmd.CmdProtoMap
-	clientProtoProxy  *ClientProtoProxy
+	serverCmdProtoMap *cmd.CmdProtoMap  // 服务端 3.2 版本 cmd ↔ proto 映射
+	clientProtoProxy  *ClientProtoProxy // 客户端协议代理（多版本部署时启用）
 	// 密钥
-	signRsaKey   []byte
-	encRsaKeyMap map[string][]byte
-	dispatchKey  []byte
+	signRsaKey   []byte            // 区服签名密钥（v2.7.5+ 客户端必需）
+	encRsaKeyMap map[string][]byte // 5 套加密密钥（按 KeyId 选）
+	dispatchKey  []byte            // dispatch 通信用 ec2b 派生 key
 }
 
 func NewConnManager(db *dao.Dao, messageQueue *mq.MessageQueue, discovery *rpc.DiscoveryClient) (*ConnManager, error) {
@@ -105,6 +123,17 @@ func NewConnManager(db *dao.Dao, messageQueue *mq.MessageQueue, discovery *rpc.D
 	return r, nil
 }
 
+// run 启动 gate 监听 + 后台同步任务（NewConnManager 内部调用）
+//
+// 启动顺序：
+//  1. 加载 RSA 密钥（5 套加密 + 1 套签名）
+//  2. 从 Node 获取 region ec2b → 派生 dispatchKey
+//  3. 启动 KCP 监听（必启 KcpPort=22222）
+//  4. 启动 TCP 监听（可选 TcpModeEnable=true 时）
+//  5. 启动 forwardServerMsgToClient 转发 goroutine（共享一个）
+//  6. 立即同步一次全局在线/最小负载/白名单/停服信息（首次启动需要 同步完成才能服务）
+//  7. 启动后台周期同步 goroutine
+//  8. 启动连接事件日志 goroutine
 func (c *ConnManager) run() error {
 	// 读取密钥相关文件
 	c.signRsaKey, c.encRsaKeyMap, _ = region.LoadRegionRsaKey()
@@ -187,7 +216,17 @@ func (c *ConnManager) kcpNetInfo() {
 	}
 }
 
-// 接收新连接协程
+// acceptHandle 监听新连接并启动 recv/send 协程（KCP 和 TCP 共用同一函数）
+//
+// 处理：
+//  1. 频率限制：每秒最多 ConnEstFreqLimit=100 个新连接（防 DDoS）
+//  2. 容量限制：超过 MaxClientConnNumLimit=1000 拒绝新连接
+//  3. 停服模式：StopServerInfo.IsStopServer=true 时仅允许白名单 IP 进
+//  4. 创建 Session 启动 recvHandle + sendHandle 两个 goroutine
+//
+// tcpMode 区分：true 走 TCP listener / false 走 KCP listener
+//
+//	两种模式底层抽象成 Conn 接口（KCPConn / TCPConn 各自实现）
 func (c *ConnManager) acceptHandle(tcpMode bool, kcpListener *kcp.Listener, tcpListener *net.TCPListener) {
 	logger.Info("accept handle start, tcpMode: %v", tcpMode)
 	connEstFreqLimitCounter := 0
@@ -282,6 +321,16 @@ type Session struct {
 }
 
 // 接收协程
+// recvHandle 客户端接收循环（每个会话独立 goroutine）
+//
+// 处理：
+//  1. KCP/TCP Read 阻塞读取数据
+//  2. ConnRecvTimeout=30s 收包超时 关连接
+//  3. 频率限制：单会话每秒最多 RecvPacketFreqLimit=1000 个包
+//  4. KCP 解码 → ProtoDecode → forwardClientMsgToServerHandle
+//  5. 任意错误关闭 KCP 会话
+//
+// recv goroutine 是 gate 网络层的"客户端→服务端"主路径
 func (c *ConnManager) recvHandle(session *Session) {
 	logger.Info("recv handle start, sessionId: %v", session.sessionId)
 	conn := session.conn
@@ -377,6 +426,16 @@ func (c *ConnManager) recvHandle(session *Session) {
 }
 
 // 发送协程
+// sendHandle 客户端发送循环（每个会话独立 goroutine）
+//
+// 处理：
+//  1. 阻塞读 session.sendChan（容量默认 256）
+//  2. 频率限制：单会话每秒最多 SendPacketFreqLimit=1000 个包
+//  3. ProtoEncode → KCP 编码 → KCP/TCP Write
+//  4. ConnSendTimeout=10s 发包超时 关连接
+//
+// sendHandle 与 recvHandle 是会话的两个独立 goroutine
+// sendChan 是 forwardServerMsgToClient 与 sendHandle 之间的桥梁
 func (c *ConnManager) sendHandle(session *Session) {
 	logger.Info("send handle start, sessionId: %v", session.sessionId)
 	conn := session.conn
@@ -483,7 +542,16 @@ func (c *ConnManager) closeConnBySessionId(sessionId uint32, reason uint32) {
 	logger.Info("conn has been close, sessionId: %v", sessionId)
 }
 
-// 关闭连接
+// closeConn 关闭客户端连接的核心实现
+//
+// 处理：
+//  1. CAS 防重入（确保只关闭一次）
+//  2. DeleteSession 从全局 sessionMap 移除
+//  3. CloseReason 用 enetType 通知客户端关闭原因（kcp.Enet*）
+//  4. 推 ConnEventClose 事件到日志
+//  5. 通知 GS 玩家下线（UserOfflineNotify）让 GS 走 OnOffline 保存玩家档
+//  6. 推 destroySessionChan 让 forwardServerMsgToClient 清理本地缓存
+//  7. CLIENT_CONN_NUM 计数器减一
 func (c *ConnManager) closeConn(session *Session, enetType uint32) {
 	ok := atomic.CompareAndSwapUint32(&(session.connState), ConnEst, ConnClose)
 	if !ok {
@@ -550,6 +618,11 @@ func (c *ConnManager) autoSyncGlobalGsOnlineMap() {
 	}
 }
 
+// syncGlobalGsOnlineMap 同步全局玩家在线表（每 60 秒）
+//
+// 从 Node 拉取全局 uid → gsAppId 映射 替换本 gate 缓存
+// 用途：跨服顶号/查询玩家所在 GS/全服好友列表等
+// 复制后再加锁替换 减小锁占用时间
 func (c *ConnManager) syncGlobalGsOnlineMap() {
 	rsp, err := c.discoveryClient.GetGlobalGsOnlineMap(context.TODO(), nil)
 	if err != nil {
@@ -575,6 +648,11 @@ func (c *ConnManager) autoSyncMinLoadServerAppid() {
 	}
 }
 
+// syncMinLoadServerAppid 同步最小负载 GS / Multi 的 appId（每 15 秒）
+//
+// Node 按各 GS / Multi 的当前在线人数返回最少的那个
+// gate 用 minLoadGsServerAppId 作为新会话的默认 GS（在 doGateLogin 时分配）
+// Multi 失败不报错（multi 是可选服务 没有也能跑）
 func (c *ConnManager) syncMinLoadServerAppid() {
 	gsServerAppId, err := c.discoveryClient.GetServerAppId(context.TODO(), &api.GetServerAppIdReq{
 		ServerType: api.GS,
@@ -629,7 +707,17 @@ func (c *ConnManager) syncWhiteList() {
 	c.whiteList = whiteList
 }
 
-// tcp模式连接对象兼容层
+// TCP 模式连接对象兼容层 - 让 KCP 和 TCP 走同一抽象
+//
+// 项目作者实验性能时做了 TCP 模式：客户端用 mihoyonettcp.dll（仿照官方 KCP DLL 实现的 TCP 版）
+// 服务端 gate 也支持 TCP 监听 通过 Conn 接口让上层代码不感知底层是 KCP 还是 TCP
+//
+// **生产部署仍用 KCP**（mihoyonettcp 是作者性能对比研究的产物）
+// 详见 CLAUDE.md "客户端对接" 中关于 mihoyonettcp 的说明
+//
+// TCPConn 实现注意：
+//   - 模拟 KCP 的 Conv（用 sessionId 作为 conv id）
+//   - GetRTO/GetSRTT 通过 ICMP-like 心跳估算（KCP 原生有 RTT 这里没有）
 
 type Conn interface {
 	GetSessionId() uint32

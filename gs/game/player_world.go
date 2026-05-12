@@ -16,10 +16,26 @@ import (
 )
 
 // 大地图模块 大世界相关的所有逻辑
+//
+// 本文件承载玩家与大世界交互的全部协议处理：
+//   - 传送系统（SceneTransToPointReq/UnlockTransPointReq/GetScenePointReq）：解锁/使用传送点
+//   - 地图标点（MarkMapReq）：玩家自定义地图标点 + GM特殊标记 "@@y" 直接传送到指定高度
+//   - 区域系统（GetSceneAreaReq/EnterWorldAreaReq）：场景区域解锁
+//   - 时间天气（ChangeGameTimeReq）：改游戏内时间（影响 NPC 对话/天气）
+//   - NPC对话（NpcTalkReq）：玩家 NPC 互动
+//   - 副本系统（DungeonEntryInfoReq/PlayerEnterDungeonReq/PlayerQuitDungeonReq）：进出副本（**当前进副本是空场景**）
+//   - 物件交互（GadgetInteractReq/SelectWorktopOptionReq）：宝箱开启/操作台选项
+//   - 小道具系统（GetWidgetSlotReq/SetWidgetSlotReq/QuickUseWidgetReq）：饮食/扶桑等小工具
+//   - 隐藏成就（PersonalSceneJumpReq）：传送到隐藏区域
+//   - 任务视频（GetParentQuestVideoKeyReq）：任务CG解密key
+//
+// 核心工具函数：TeleportPlayer 是玩家所有传送场景的统一入口
 
 /************************************************** 接口请求 **************************************************/
 
-// SceneTransToPointReq 场景传送到传送点请求
+// SceneTransToPointReq 玩家点击地图传送点传送
+// 必须 SceneLoadState=SceneEnterDone 且传送点已解锁（CheckPointUnlock）
+// 走 TeleportPlayer 统一传送入口（reason=ENTER_REASON_TRANS_POINT）
 func (g *Game) SceneTransToPointReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.SceneTransToPointReq)
 
@@ -119,7 +135,11 @@ func (g *Game) GetScenePointReq(player *model.Player, payloadMsg pb.Message) {
 	g.SendMsg(cmd.GetScenePointRsp, player.PlayerId, player.ClientSeq, rsp)
 }
 
-// MarkMapReq 地图标点请求
+// MarkMapReq 地图标点请求 ADD/DEL/MOD 三种操作
+//
+// 隐藏 GM 用法：在地图上点 NPC 标点 名字写"@@500"会传送到该位置高度500（防止落在地下）
+// 用 PluginEventIdMarkMap 事件让插件可拦截（如 PUBG 插件可能拦截）
+// 标点保存在 dbWorld.MapMarkList（玩家档持久化）
 func (g *Game) MarkMapReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.MarkMapReq)
 
@@ -269,7 +289,9 @@ func (g *Game) EnterWorldAreaReq(player *model.Player, payloadMsg pb.Message) {
 	g.SendMsg(cmd.EnterWorldAreaRsp, player.PlayerId, player.ClientSeq, rsp)
 }
 
-// ChangeGameTimeReq 修改游戏时间请求
+// ChangeGameTimeReq 修改游戏内时间请求（小时:分钟）
+// 多人世界使用房主时间 所以这个修改会影响整个世界所有玩家看到的天气/NPC对话
+// 改时间后会随机一次天气气象（早晨/中午/傍晚 不同时段天气倾向不同）
 func (g *Game) ChangeGameTimeReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.ChangeGameTimeReq)
 
@@ -286,7 +308,8 @@ func (g *Game) ChangeGameTimeReq(player *model.Player, payloadMsg pb.Message) {
 	g.WeatherClimateRandom(player, player.WeatherInfo.WeatherAreaId)
 
 	rsp := &proto.ChangeGameTimeRsp{
-		CurGameTime: world.GetGameTime(),
+		CurGameTime: req.GameTime,
+		ExtraDays:   req.ExtraDays,
 	}
 	g.SendMsg(cmd.ChangeGameTimeRsp, player.PlayerId, player.ClientSeq, rsp)
 }
@@ -327,7 +350,9 @@ func (g *Game) DungeonEntryInfoReq(player *model.Player, payloadMsg pb.Message) 
 	g.SendMsg(cmd.DungeonEntryInfoRsp, player.PlayerId, player.ClientSeq, rsp)
 }
 
-// PlayerEnterDungeonReq 玩家进入秘境请求
+// PlayerEnterDungeonReq 玩家进入秘境（副本）请求
+// 注意：副本进得去 但**场景内是空的**（没有怪/机关/任务流程） 副本玩法基本未实现
+// 走 TeleportPlayer 把玩家传送到副本场景的出生点（BornPos/BornRot 来自副本场景的 Lua 配置）
 func (g *Game) PlayerEnterDungeonReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.PlayerEnterDungeonReq)
 
@@ -392,7 +417,15 @@ func (g *Game) PlayerQuitDungeonReq(player *model.Player, payloadMsg pb.Message)
 	g.SendMsg(cmd.PlayerQuitDungeonRsp, player.PlayerId, player.ClientSeq, rsp)
 }
 
-// GadgetInteractReq gadget交互请求
+// GadgetInteractReq 物件交互请求（玩家走到物件前按F触发）
+//
+// 按物件类型分支：
+//   - GADGET/EQUIP/ENERGY_BALL: 掉落物捡起 → AddPlayerItem + 销毁物件
+//   - GATHER_OBJECT: 采集物（薄荷/蘑菇等）摘取 → AddPlayerItem + 销毁物件
+//   - CHEST: 宝箱 → 等 OpType=FINISH（开宝箱动画结束）后随机掉落 + 改状态为 CHEST_OPENED + 销毁
+//   - 怪物：环境动物（兔子等）直接杀掉（TODO 掉落物未做）
+//
+// 用 PluginEventIdGadgetInteract 事件让插件可拦截
 func (g *Game) GadgetInteractReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.GadgetInteractReq)
 
@@ -665,6 +698,19 @@ func (g *Game) PersonalSceneJumpReq(player *model.Player, payloadMsg pb.Message)
 	})
 }
 
+func (g *Game) GetParentQuestVideoKeyReq(player *model.Player, payloadMsg pb.Message) {
+	req := payloadMsg.(*proto.GetParentQuestVideoKeyReq)
+	mainQuestDataConfig := gdconf.GetMainQuestDataById(int32(req.ParentQuestId))
+	if mainQuestDataConfig == nil {
+		logger.Error("get main quest data is nil, parent quest id: %v", req.ParentQuestId)
+		return
+	}
+	g.SendMsg(cmd.GetParentQuestVideoKeyRsp, player.PlayerId, player.ClientSeq, &proto.GetParentQuestVideoKeyRsp{
+		VideoKey:      mainQuestDataConfig.VideoKey,
+		ParentQuestId: req.ParentQuestId,
+	})
+}
+
 /************************************************** 游戏功能 **************************************************/
 
 // UnlockPlayerScenePoint 解锁场景锚点
@@ -871,6 +917,9 @@ func (g *Game) doRandDropFull(dropDataConfig *gdconf.DropData) map[uint32]uint32
 	return nil
 }
 
+// doRandDropOnce 单次随机掉落 两种随机策略：
+//   - RandomTypeChoose: RWS（按权重轮盘） 在 SubDropTotalWeight 范围抽 1 次 命中哪个就掉哪个
+//   - RandomTypeIndep: 独立随机 每个 SubDrop 单独按权重判 可能多个同时掉
 func (g *Game) doRandDropOnce(dropDataConfig *gdconf.DropData) map[int32]int32 {
 	dropMap := make(map[int32]int32)
 	switch dropDataConfig.RandomType {
@@ -903,7 +952,15 @@ func (g *Game) doRandDropOnce(dropDataConfig *gdconf.DropData) map[int32]int32 {
 	return dropMap
 }
 
-// TeleportPlayer 传送玩家通用接口
+// TeleportPlayer 玩家传送统一入口（所有场景的传送都走这里：传送点/标点/副本/GM/任务）
+//
+// 处理流程：
+//  1. AI世界限制：非GM玩家不能传送（PUBG玩法对位置敏感）
+//  2. 判断是否跨场景：sceneId 不同 → SceneJump=true 走 ENTER_JUMP（副本走 ENTER_DUNGEON）
+//     · SceneJump 时先发 DelTeamEntityNotify 让客户端清掉队伍实体
+//  3. 同场景传送：SceneJump=false 走 ENTER_GOTO（不需要清场景）
+//  4. 创建 enterSceneContext 写入 token + 发 PlayerEnterSceneNotify
+//  5. 客户端收到 Notify 后开始走四步状态机（EnterSceneReadyReq → ... → PostEnterSceneReq）
 func (g *Game) TeleportPlayer(
 	player *model.Player, enterReason proto.EnterReason,
 	sceneId uint32, pos, rot *model.Vector,

@@ -11,6 +11,28 @@ import (
 	lua "github.com/yuin/gopher-lua"
 )
 
+// 场景 Lua 配置 - 项目最复杂的配置加载器（详见 CLAUDE.md "Lua 虚拟机 LRU 缓存"）
+//
+// 数据规模：
+//   - 场景 group 数量极大（数万个）每个 group 一个独立 Lua VM
+//   - 全部常驻会爆内存（每个 VM 几百 KB → 数万 GB）
+//   - 解决：LRU 缓存机制 仅保留最近使用的 1000 个
+//
+// 三层结构：
+//   - SceneLuaConfig: 场景级（如蒙德/璃月）含 sceneConfig + blockMap
+//   - Block: 区块级 含 groupMap 玩家存档以 block 为单位
+//   - Group: 最小组织单元 含怪物/物件/NPC/触发器/变量/Lua VM
+//
+// LRU 内存控制（onTickMinute 触发）：
+//   - LuaStateLruKeepNum=1000: 常驻上限
+//   - 超出时清理最旧的 group VM
+//   - 删掉后下次访问该 group 需要重新解析 Lua 文件 → 重建 VM
+//   - **state 会重置 但 group 的存档变量在 model.SceneGroup.VariableMap 里持久化所以不丢**
+//
+// 加载并发：SceneGroupLoaderLimit=4 平衡内存峰值
+//   每个 group 加载需占用一个 Lua VM 解析配置后立即释放
+//   并发数过高会同时持有大量 VM 导致 OOM
+
 // 场景详情配置数据
 
 const (
@@ -51,6 +73,21 @@ type BlockRange struct {
 	Max *Vector `json:"max"`
 }
 
+// Group 场景组（最小组织单元）
+//
+// 一个 group 通常表示场景里一处小角落 例如：
+//   - 一处守卫怪 + 1 个宝箱 + 触发器（"打死怪→宝箱出现"）= 1 个 group
+//   - 一组 NPC + 关联区域 = 1 个 group
+//
+// 字段：
+//   - 静态数据（来自 group_xxx.lua 加载）：
+//     · MonsterMap/NpcMap/GadgetMap: 实体配置
+//     · RegionMap: 触发区域（不可见 玩家进入触发 Lua）
+//     · TriggerMap: 触发器（条件 + 动作）
+//     · VariableMap: group 状态变量（玩家档持久化）
+//     · SuiteMap: 不同状态的实体集合（初始/打完怪/拿完宝箱等不同状态）
+//   - 运行时（LuaStr / LuaState）：LRU 控制 数万 group VM 不能全常驻
+//   - LuaStr 留着是为了 LRU 清掉后能快速重建 VM（不用再读文件）
 type Group struct {
 	Id              int32                `json:"id"`
 	RefreshId       int32                `json:"refresh_id"`
@@ -61,13 +98,13 @@ type Group struct {
 	MonsterMap      map[int32]*Monster   `json:"-"` // 怪物
 	NpcMap          map[int32]*Npc       `json:"-"` // NPC
 	GadgetMap       map[int32]*Gadget    `json:"-"` // 物件
-	RegionMap       map[int32]*Region    `json:"-"` // 区域
-	TriggerMap      map[string]*Trigger  `json:"-"` // 触发器
-	VariableMap     map[string]*Variable `json:"-"` // 变量
-	GroupInitConfig *GroupInitConfig     `json:"-"` // 初始化配置
-	SuiteMap        map[int32]*Suite     `json:"-"` // 小组配置
-	LuaStr          string               `json:"-"` // LUA原始字符串缓存
-	LuaState        *lua.LState          `json:"-"` // LUA虚拟机实例
+	RegionMap       map[int32]*Region    `json:"-"` // 区域（触发器形状）
+	TriggerMap      map[string]*Trigger  `json:"-"` // Lua 触发器（条件+动作）
+	VariableMap     map[string]*Variable `json:"-"` // group 状态变量（持久化）
+	GroupInitConfig *GroupInitConfig     `json:"-"` // 初始化配置（默认 suite）
+	SuiteMap        map[int32]*Suite     `json:"-"` // 小组配置（实体状态切换）
+	LuaStr          string               `json:"-"` // Lua 原始字符串（LRU 重建用）
+	LuaState        *lua.LState          `json:"-"` // Lua VM 实例（受 LRU 控制）
 	BlockId         int32                `json:"-"`
 }
 
@@ -447,6 +484,8 @@ func GetSceneGroup(groupId int32) *Group {
 	return groupConfig
 }
 
+// LuaStateLru LRU 表条目 按 AccessTime 排序决定淘汰顺序
+// GroupId 关联到具体 group AccessTime 每次 GetLuaState 时更新
 type LuaStateLru struct {
 	GroupId    int32
 	AccessTime int64
@@ -466,6 +505,16 @@ func (l LuaStateLruList) Swap(i, j int) {
 	l[i], l[j] = l[j], l[i]
 }
 
+// LuaStateLruRemove 淘汰最旧的 Lua VM 释放内存（每分钟调用一次 见 game_tick_manager.go:onTickMinute）
+//
+// 淘汰流程：
+//  1. 当前 LRU 表条目数超过 LuaStateLruKeepNum=1000 才触发（否则直接 return）
+//  2. 按 AccessTime 升序排序 取最旧的 N 个
+//  3. 把每个 group.LuaState 置 nil（Lua VM 失去引用 GC 自动回收）
+//  4. 从 LRU 表里删掉对应条目
+//
+// **淘汰后下次访问该 group 时 GetLuaState 会重建 VM**（newLuaState + 重新解析 g.LuaStr）
+// VM 内部状态会重置 但**group 存档变量在 model.SceneGroup.VariableMap 持久化**所以不丢
 func LuaStateLruRemove() {
 	removeNum := len(CONF.SceneLuaStateLruMap) - LuaStateLruKeepNum
 	if removeNum <= 0 {
@@ -485,6 +534,14 @@ func LuaStateLruRemove() {
 	logger.Info("lua state lru remove finish, remove num: %v", removeNum)
 }
 
+// GetLuaState 获取 group 的 Lua VM（懒加载 + LRU 访问时间更新）
+//
+// 每次调用都更新 LRU 表的 AccessTime（让活跃 group 不被淘汰）
+// 首次访问或 VM 被淘汰后：
+//  1. newLuaState 重新解析 g.LuaStr 创建新 VM
+//  2. 注册 ScriptLib 全局表（暴露给 Lua 调用的 Go 函数集合）
+//  3. SCRIPT_LIB_FUNC_LIST 在 gs/game/lua_func.go RegLuaScriptLibFunc 中填充
+//     注意：本文件不知道具体注册了什么函数 业务侧通过 RegScriptLibFunc 动态追加
 func (g *Group) GetLuaState() *lua.LState {
 	CONF.SceneLuaStateLruMap[g.Id] = &LuaStateLru{
 		GroupId:    g.Id,

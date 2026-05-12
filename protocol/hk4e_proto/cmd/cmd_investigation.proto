@@ -1,3 +1,5 @@
+// 调查相关协议
+
 syntax = "proto3";
 
 package proto;
@@ -8,31 +10,31 @@ option go_package = "./;proto";
 
 message Investigation {
     enum State {
-        INVALID = 0;
-        IN_PROGRESS = 1;
-        COMPLETE = 2;
-        REWARD_TAKEN = 3;
+        INVALID = 0;      // 非法
+        IN_PROGRESS = 1;  // 进行中
+        COMPLETE = 2;     // 已完成
+        REWARD_TAKEN = 3; // 已领奖
     }
 
-    uint32 total_progress = 5;
-    State state = 2;
-    uint32 progress = 13;
-    uint32 id = 9;
+    uint32 total_progress = 5; // 总进度
+    State state = 2;           // 调查当前的状态
+    uint32 progress = 13;      // 调查当前进度
+    uint32 id = 9;             // 调查ID
 }
 
 message InvestigationTarget {
     enum State {
-        INVALID = 0;
-        IN_PROGRESS = 1;
-        COMPLETE = 2;
-        REWARD_TAKEN = 3;
+        INVALID = 0;      // 非法
+        IN_PROGRESS = 1;  // 进行中
+        COMPLETE = 2;     // 已完成
+        REWARD_TAKEN = 3; // 已领奖
     }
 
-    uint32 quest_id = 15;
-    State state = 2;
+    uint32 quest_id = 15;        // 对应的子任务ID
+    State state = 2;             // 当前的状态
     uint32 progress = 8;
     uint32 total_progress = 7;
-    uint32 investigation_id = 3;
+    uint32 investigation_id = 3; // 对应的调查ID
 }
 
 message PlayerInvestigationAllInfoNotify {
@@ -48,6 +50,7 @@ message PlayerInvestigationAllInfoNotify {
     repeated InvestigationTarget investigation_target_list = 12;
 }
 
+// 领取调查的奖励
 message TakeInvestigationRewardReq {
     enum CmdId {
         option allow_alias = true;
@@ -58,7 +61,7 @@ message TakeInvestigationRewardReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 id = 5;
+    uint32 id = 5; // 要领取奖励的调查ID
 }
 
 message TakeInvestigationRewardRsp {
@@ -71,9 +74,10 @@ message TakeInvestigationRewardRsp {
     }
 
     int32 retcode = 4;
-    uint32 id = 12;
+    uint32 id = 12; // 领取奖励的调查ID
 }
 
+// 领取调查目标任务的奖励
 message TakeInvestigationTargetRewardReq {
     enum CmdId {
         option allow_alias = true;
@@ -84,7 +88,7 @@ message TakeInvestigationTargetRewardReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 quest_id = 11;
+    uint32 quest_id = 11; // 要领取奖励的调查任务ID
 }
 
 message TakeInvestigationTargetRewardRsp {
@@ -97,9 +101,10 @@ message TakeInvestigationTargetRewardRsp {
     }
 
     int32 retcode = 1;
-    uint32 quest_id = 2;
+    uint32 quest_id = 2; // 领取奖励的调查任务ID
 }
 
+// 拉取调查怪物的信息
 message GetInvestigationMonsterReq {
     enum CmdId {
         option allow_alias = true;
@@ -110,33 +115,33 @@ message GetInvestigationMonsterReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    repeated uint32 city_id_list = 3;
+    repeated uint32 city_id_list = 3; // 请求查询的city_id列表
     bool is_for_mark = 4;
 }
 
 message InvestigationMonster {
     enum LockState {
-        LOCK_NONE = 0;
-        LOCK_QUEST = 1;
+        LOCK_NONE = 0;  // 无锁定
+        LOCK_QUEST = 1; // 任务锁定
     }
 
-    bool is_alive = 9;
-    uint32 refresh_interval = 3;
-    uint32 id = 13;
-    uint32 level = 5;
-    uint32 boss_chest_num = 1;
+    bool is_alive = 9;             // 怪物是否活着
+    uint32 refresh_interval = 3;   // 总共刷新需要的时间间隔
+    uint32 id = 13;                // 配置ID
+    uint32 level = 5;              // 怪物等级
+    uint32 boss_chest_num = 1;     // 已经领取的boss宝箱数量
     WeeklyBossResinDiscountInfo weekly_boss_resin_discount_info = 12;
     uint32 monster_id = 301;
-    Vector pos = 14;
+    Vector pos = 14;               // 位置
     uint32 resin = 8;
-    uint32 max_boss_chest_num = 4;
-    uint32 next_refresh_time = 11;
+    uint32 max_boss_chest_num = 4; // boss宝箱领取数量限制
+    uint32 next_refresh_time = 11; // 下次刷新时间戳
     uint32 group_id = 285;
     uint32 scene_id = 10;
     bool is_area_locked = 15;
-    LockState lock_state = 2;
+    LockState lock_state = 2;      // 锁定状态，展示用
     uint32 next_boss_chest_refresh_time = 7;
-    uint32 city_id = 6;
+    uint32 city_id = 6;            // 所属城市ID
 }
 
 message GetInvestigationMonsterRsp {

@@ -21,12 +21,34 @@ import (
 	lua "github.com/yuin/gopher-lua"
 )
 
-// 游戏数据配置表
+// 游戏数据配置表 - gdconf 包入口（详见 CLAUDE.md "配置数据层"）
+//
+// **配置数据来源（重要）**：
+//   - 全部基于 3.2 版本官服配置（**直接从原神官方服务端解出来的配置**）
+//   - 与 grasscutter 不同（grasscutter 用客户端 dump）：本项目用官服原版配置
+//   - 数值/掉落/属性曲线/任务参数等都和官服一致 玩家体验更接近正式服
+//   - 若以后有更高版本配置泄漏 可无缝升级（格式和加载器都不需要改）
+//   - 例外：ext/ 目录是作者自己做的扩展（抽卡/PUBG 物件配置）
+//
+// 三种数据源（位于 game_data_config/ 子目录）：
+//   - txt/: CSV 结构化数值表（角色/怪物/曲线等）用 csvutil 解析
+//   - json/: HJSON 宽松 JSON（含注释/无引号 key 存能力/物件/载具）
+//   - lua/: 场景 Lua（用 gopher-lua VM 加载）
+//
+// 加载流程：
+//   - 启动时 InitGameDataConfig() sync.Once 串行调用 53 个 loadXxx()
+//   - 任何失败 panic 服务无法启动
+//   - 场景 Lua 4 并发加载（SceneGroupLoaderLimit=4 平衡内存）
+//
+// 热重载（GM 命令 reload）：
+//   - ReloadGameDataConfig 把新配置加载到 CONF_RELOAD
+//   - ReplaceGameDataConfig 原子替换（CONF = CONF_RELOAD）
+//   - 业务代码全部通过 GetXxx() 函数访问 透明切换
 
 var (
-	CONF        *GameDataConfig = nil
-	CONF_RELOAD *GameDataConfig = nil
-	ONCE        sync.Once
+	CONF        *GameDataConfig = nil // 当前生效配置（业务代码通过 Get* 函数访问）
+	CONF_RELOAD *GameDataConfig = nil // 热重载临时配置 加载完后原子替换
+	ONCE        sync.Once             // 防止 InitGameDataConfig 被多次调用
 )
 
 type GameDataConfig struct {
@@ -66,8 +88,10 @@ type GameDataConfig struct {
 	RewardDataMap              map[int32]*RewardData                      // 奖励
 	AvatarCostumeDataMap       map[int32]*AvatarCostumeData               // 角色时装
 	AvatarFlycloakDataMap      map[int32]*AvatarFlycloakData              // 角色风之翼
-	ReliquaryMainDataMap       map[int32]map[int32]*ReliquaryMainData     // 圣遗物主属性
-	ReliquaryAffixDataMap      map[int32]map[int32]*ReliquaryAffixData    // 圣遗物追加属性
+	ReliquaryMainDataDepotMap  map[int32]map[int32]*ReliquaryMainData     // 圣遗物主属性库
+	ReliquaryMainDataMap       map[int32]*ReliquaryMainData               // 圣遗物主属性
+	ReliquaryAffixDataDepotMap map[int32]map[int32]*ReliquaryAffixData    // 圣遗物追加属性库
+	ReliquaryAffixDataMap      map[int32]*ReliquaryAffixData              // 圣遗物追加属性
 	QuestDataMap               map[int32]*QuestData                       // 任务
 	ParentQuestMap             map[int32]map[int32]*QuestData             // 父任务索引
 	DropDataMap                map[int32]*DropData                        // 掉落
@@ -95,8 +119,14 @@ type GameDataConfig struct {
 	WidgetJsonConfigMap        map[string]*ConfigWidget                   // 小道具JSON配置
 	ChapterDataMap             map[int32]*ChapterData                     // 章节
 	MainQuestDataMap           map[int32]*MainQuestData                   // 主线任务
+	TalentSkillDataMap         map[int32]*TalentSkillData                 // 命座
 }
 
+// InitGameDataConfig 初始化游戏数据配置（GS/Multi 启动时调用一次）
+//
+// sync.Once 保证只执行一次（即使被多个服务调用也只加载一次）
+// 加载耗时：典型 5-10 秒（取决于场景 Lua 数量）
+// LoadSceneLuaConfig=false 时跳过场景 Lua（开发期省时）
 func InitGameDataConfig() {
 	ONCE.Do(func() {
 		CONF = new(GameDataConfig)
@@ -108,6 +138,11 @@ func InitGameDataConfig() {
 	})
 }
 
+// ReloadGameDataConfig 热重载（GM 命令 reload 触发）
+//
+// 不阻塞主循环：在 goroutine 中加载到 CONF_RELOAD（详见 game_local_event_manager.go）
+// 加载完成后通过 LocalEvent 通知主循环调 ReplaceGameDataConfig 原子替换
+// reloadSceneLua=true 时同时重载场景 Lua（耗时较长 数万 group 全部重新解析）
 func ReloadGameDataConfig(reloadSceneLua bool) {
 	CONF_RELOAD = new(GameDataConfig)
 	startTime := time.Now().Unix()
@@ -117,6 +152,9 @@ func ReloadGameDataConfig(reloadSceneLua bool) {
 	logger.Info("reload all game data config finish, cost: %v(s)", endTime-startTime)
 }
 
+// ReplaceGameDataConfig 原子替换 CONF 指针（仅在主循环调用 单线程安全）
+// 业务代码持有的 *XxxData 指针仍指向旧配置（GC 后释放）
+// 替换后 GetXxx() 系列返回的都是新配置
 func ReplaceGameDataConfig() {
 	CONF = CONF_RELOAD
 }
@@ -216,6 +254,7 @@ func (g *GameDataConfig) load(loadSceneLua bool) {
 	g.loadWidgetJsonConfig()           // 小道具JSON配置
 	g.loadChapterData()                // 章节
 	g.loadMainQuestData()              // 主线任务
+	g.loadTalentSkillData()            // 命座
 	if g.loadExt {
 		g.loadGachaDropGroupData()  // 卡池掉落组 临时的
 		g.loadPubgWorldGadgetData() // pubg世界物件

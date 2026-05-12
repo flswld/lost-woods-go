@@ -15,6 +15,9 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
+// PingReq 客户端心跳请求
+// 维护 LastKeepaliveTime（onUserTickMinute 用它检查超时60s未心跳则踢人）
+// 同时校验客户端时钟与服务端偏差 偏差>600s只打日志不踢（仅作排查线索）
 func (g *Game) PingReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.PingReq)
 
@@ -32,6 +35,8 @@ func (g *Game) PingReq(player *model.Player, payloadMsg pb.Message) {
 	})
 }
 
+// TowerAllDataReq 深境螺旋全部数据请求
+// 当前未实现深渊玩法 返回固定假数据让客户端不报错（只能进塔界面但里面没内容）
 func (g *Game) TowerAllDataReq(player *model.Player, payloadMsg pb.Message) {
 	towerAllDataRsp := &proto.TowerAllDataRsp{
 		TowerScheduleId:        29,
@@ -49,6 +54,8 @@ func (g *Game) TowerAllDataReq(player *model.Player, payloadMsg pb.Message) {
 	g.SendMsg(cmd.TowerAllDataRsp, player.PlayerId, player.ClientSeq, towerAllDataRsp)
 }
 
+// ClientRttNotify 由Gate上报的玩家网络往返时延
+// 仅记录到 player.ClientRTT 字段 由 WorldPlayerRTTNotify 周期性广播给多人世界其他玩家显示
 func (g *Game) ClientRttNotify(userId uint32, clientRtt uint32) {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {
@@ -59,6 +66,8 @@ func (g *Game) ClientRttNotify(userId uint32, clientRtt uint32) {
 	player.ClientRTT = clientRtt
 }
 
+// ServerAnnounceNotify 全服公告（屏幕中央滚动条文字）
+// 1秒持续期 1次频率 GM命令 ServerAnnounce 调用
 func (g *Game) ServerAnnounceNotify(announceId uint32, announceMsg string) {
 	for _, onlinePlayer := range USER_MANAGER.GetAllOnlineUserList() {
 		now := uint32(time.Now().Unix())
@@ -75,6 +84,7 @@ func (g *Game) ServerAnnounceNotify(announceId uint32, announceMsg string) {
 	}
 }
 
+// ServerAnnounceRevokeNotify 撤销之前发过的公告
 func (g *Game) ServerAnnounceRevokeNotify(announceId uint32) {
 	for _, onlinePlayer := range USER_MANAGER.GetAllOnlineUserList() {
 		serverAnnounceRevokeNotify := &proto.ServerAnnounceRevokeNotify{
@@ -84,6 +94,7 @@ func (g *Game) ServerAnnounceRevokeNotify(announceId uint32) {
 	}
 }
 
+// ToTheMoonEnterSceneReq 客户端进入场景时上报的 ttm（to-the-moon）数据 服务端不处理仅回空响应
 func (g *Game) ToTheMoonEnterSceneReq(player *model.Player, payloadMsg pb.Message) {
 	logger.Debug("player ttm enter scene, uid: %v", player.PlayerId)
 	req := payloadMsg.(*proto.ToTheMoonEnterSceneReq)
@@ -91,6 +102,7 @@ func (g *Game) ToTheMoonEnterSceneReq(player *model.Player, payloadMsg pb.Messag
 	g.SendMsg(cmd.ToTheMoonEnterSceneRsp, player.PlayerId, player.ClientSeq, new(proto.ToTheMoonEnterSceneRsp))
 }
 
+// PathfindingEnterSceneReq 客户端进入场景时的寻路数据请求 服务端无寻路逻辑空回复
 func (g *Game) PathfindingEnterSceneReq(player *model.Player, payloadMsg pb.Message) {
 	logger.Debug("player pf enter scene, uid: %v", player.PlayerId)
 	req := payloadMsg.(*proto.PathfindingEnterSceneReq)
@@ -98,6 +110,8 @@ func (g *Game) PathfindingEnterSceneReq(player *model.Player, payloadMsg pb.Mess
 	g.SendMsg(cmd.PathfindingEnterSceneRsp, player.PlayerId, player.ClientSeq, new(proto.PathfindingEnterSceneRsp))
 }
 
+// QueryPathReq 客户端寻路查询（怪物/NPC按server-side寻路移动时使用）
+// 当前简化实现：直接返回起点→终点的直线路径 不实际调用 navmesh.CalculatePath
 func (g *Game) QueryPathReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.QueryPathReq)
 	queryPathRsp := &proto.QueryPathRsp{
@@ -108,13 +122,16 @@ func (g *Game) QueryPathReq(player *model.Player, payloadMsg pb.Message) {
 	g.SendMsg(cmd.QueryPathRsp, player.PlayerId, player.ClientSeq, queryPathRsp)
 }
 
+// ObstacleModifyNotify 客户端动态障碍物变更通知（如砍倒树木导致地形变化）
+// 服务端不做处理（导航系统未深度集成动态避障）
 func (g *Game) ObstacleModifyNotify(player *model.Player, payloadMsg pb.Message) {
 	ntf := payloadMsg.(*proto.ObstacleModifyNotify)
 	_ = ntf
 	// logger.Debug("ObstacleModifyNotify: %v, uid: %v", ntf, player.PlayerId)
 }
 
-// WorldPlayerRTTNotify 世界里所有玩家的网络延迟广播
+// WorldPlayerRTTNotify 多人世界的玩家网络延迟广播 由 onTickSecond 每秒触发
+// 客户端用这些 RTT 在玩家头顶显示对方的网络延迟
 func (g *Game) WorldPlayerRTTNotify(world *World) {
 	ntf := &proto.WorldPlayerRTTNotify{
 		PlayerRttList: make([]*proto.PlayerRTTInfo, 0),
@@ -126,7 +143,8 @@ func (g *Game) WorldPlayerRTTNotify(world *World) {
 	g.SendToWorldA(world, cmd.WorldPlayerRTTNotify, 0, ntf, 0)
 }
 
-// WorldPlayerLocationNotify 多人世界其他玩家的坐标位置广播
+// WorldPlayerLocationNotify 多人世界中所有玩家的坐标朝向广播 onTick5Second 触发
+// 客户端用这个数据在小地图上标记其他玩家位置 AI世界为了反作弊不暴露真实坐标 全置零
 func (g *Game) WorldPlayerLocationNotify(world *World) {
 	ntf := &proto.WorldPlayerLocationNotify{
 		PlayerWorldLocList: make([]*proto.PlayerWorldLocationInfo, 0),
@@ -153,6 +171,8 @@ func (g *Game) WorldPlayerLocationNotify(world *World) {
 	g.SendToWorldA(world, cmd.WorldPlayerLocationNotify, 0, ntf, 0)
 }
 
+// ScenePlayerLocationNotify 场景内玩家+载具坐标广播 比 WorldPlayerLocation 多了载具信息
+// 客户端用这个数据更新场景内其他玩家和载具的实时位置
 func (g *Game) ScenePlayerLocationNotify(world *World) {
 	for _, scene := range world.GetAllScene() {
 		ntf := &proto.ScenePlayerLocationNotify{
@@ -211,6 +231,8 @@ func (g *Game) ScenePlayerLocationNotify(world *World) {
 	}
 }
 
+// SceneTimeNotify 场景启动至今的累计时间 onTick10Second 触发
+// 用于客户端的某些动画/特效同步需要场景时间作为时间基准
 func (g *Game) SceneTimeNotify(world *World) {
 	for _, scene := range world.GetAllScene() {
 		for _, player := range scene.GetAllPlayer() {
@@ -223,6 +245,8 @@ func (g *Game) SceneTimeNotify(world *World) {
 	}
 }
 
+// PlayerTimeNotify 玩家累计在线时间 + 服务器时间 onTick10Second 触发
+// 客户端按这个数据校准本地时钟和在线时长统计
 func (g *Game) PlayerTimeNotify(world *World) {
 	for _, player := range world.GetAllPlayer() {
 		playerTimeNotify := &proto.PlayerTimeNotify{
@@ -234,6 +258,8 @@ func (g *Game) PlayerTimeNotify(world *World) {
 	}
 }
 
+// PlayerGameTimeNotify 提瓦特大陆游戏内时间通知（GameTime为分钟数 0-1440）
+// 影响白天/黑夜、天气、NPC对话分支等
 func (g *Game) PlayerGameTimeNotify(world *World) {
 	for _, player := range world.GetAllPlayer() {
 		playerGameTimeNotify := &proto.PlayerGameTimeNotify{
@@ -244,6 +270,12 @@ func (g *Game) PlayerGameTimeNotify(world *World) {
 	}
 }
 
+// GmTalkReq 客户端开发版GM Talk输入框
+// 支持两种格式：
+//  1. @@FuncName(p1,p2,...) → 反射调用 GMCmd 类的 FuncName 方法（SystemFuncGM）
+//  2. 普通文本                → 等同于私聊小可爱的命令（DevClientGM）
+//
+// 必须 CmdPerm >= GM 才能用 否则直接拒绝
 func (g *Game) GmTalkReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.GmTalkReq)
 	logger.Info("GmTalkReq: %v", req.Msg)
@@ -285,6 +317,9 @@ func (g *Game) GmTalkReq(player *model.Player, payloadMsg pb.Message) {
 	g.SendMsg(cmd.GmTalkRsp, player.PlayerId, player.ClientSeq, &proto.GmTalkRsp{Retmsg: "执行成功", Msg: req.Msg})
 }
 
+// PacketPropValue 把(key, value any)封装成proto.PropValue
+// 数值大小经过类型适配 浮点走Fval分支 整数走Ival分支
+// 用于 PlayerDataNotify/PlayerPropNotify 等的 PropMap 字段构建
 func (g *Game) PacketPropValue(key uint32, value any) *proto.PropValue {
 	propValue := new(proto.PropValue)
 	propValue.Type = key
@@ -338,7 +373,8 @@ func (g *Game) PacketPropValue(key uint32, value any) *proto.PropValue {
 	return propValue
 }
 
-// GetPlayerPos 获取玩家实时位置
+// GetPlayerPos 获取玩家实时位置 优先取活跃角色实体的pos（运行时坐标）
+// 取不到时回退到 player.Pos（存档坐标 仅在保存时同步）
 func (g *Game) GetPlayerPos(player *model.Player) *model.Vector {
 	world := WORLD_MANAGER.GetWorldById(player.WorldId)
 	if world == nil {
@@ -351,7 +387,7 @@ func (g *Game) GetPlayerPos(player *model.Player) *model.Vector {
 	return entity.GetPos()
 }
 
-// GetPlayerRot 获取玩家实时朝向
+// GetPlayerRot 获取玩家实时朝向 取值规则与 GetPlayerPos 一致
 func (g *Game) GetPlayerRot(player *model.Player) *model.Vector {
 	world := WORLD_MANAGER.GetWorldById(player.WorldId)
 	if world == nil {

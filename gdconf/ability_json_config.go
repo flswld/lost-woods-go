@@ -13,6 +13,20 @@ import (
 	"github.com/hjson/hjson-go/v4"
 )
 
+// Ability JSON 配置加载器 - 角色技能/天赋/buff 的能力描述（详见 CLAUDE.md "Ability 系统现状"）
+//
+// **重要现状**：项目 Ability 系统大部分未实现 这个加载器加载了完整的 JSON 数据
+//
+//	但运行时只使用了一小部分（仅 6 种 AbilityAction + 1 种 AbilityMixin）
+//	数据结构存在 但效果不生效
+//
+// LocalId 4 种类型：
+//   - AbilityAction: 能力动作（如释放技能/扣体力）
+//   - AbilityMixin: 持续混入（如长按E持续效果）
+//   - ModifierAction: 修饰器动作
+//   - ModifierMixin: 修饰器混入
+//
+// AbilityName 通过 Hk4eAbilityHashCode 计算 hash 用于 PB 字段索引
 const (
 	LocalIdTypeAbilityAction  = 1
 	LocalIdTypeAbilityMixin   = 2

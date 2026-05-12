@@ -4,6 +4,22 @@ import (
 	"github.com/flswld/halo/logger"
 )
 
+// 任务配置加载器（详见 CLAUDE.md "任务系统协作"）
+//
+// 任务三大要素：
+//   - AcceptCond: 领取条件（什么情况下能接 如另一任务完成/玩家等级达标）
+//   - FinishCond: 完成条件（什么操作能推进 如杀怪/对话/进区域）
+//   - Exec: 副作用列表（开始/失败/完成时的钩子 解锁传送点/给奖励等）
+//
+// CondCompose 6 种逻辑组合：NONE/AND, OR, A_AND_ETCOR 等
+//   见 player_quest.go AcceptQuest 实现
+//
+// **现状（详见 CLAUDE.md）**：
+//   - AcceptCond 仅支持 STATE_EQUAL/STATE_NOT_EQUAL 两种
+//   - FinishCond 实现了 14+ 种（COMPLETE_TALK/KILL_MONSTER/进场景/时间窗等）
+//   - ExecType 实现了 12+ 种（NOTIFY_GROUP_LUA/REFRESH_GROUP_SUITE 等）
+//   - 主线/支线/世界任务/邀约任务的完整流程未实现
+
 type QuestCond struct {
 	Type         int32
 	Param        []int32

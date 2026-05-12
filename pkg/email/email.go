@@ -1,5 +1,13 @@
 // Package email is designed to provide an "email interface for humans."
 // Designed to be robust and flexible, the email package aims to make sending email easy without getting in the way.
+//
+// SMTP 邮件发送 - 完整实现（带 TLS / MIME / 附件）
+//
+// 项目当前**未实际使用**：游戏邮件系统走 player_mail.go 不通过 SMTP 发邮件
+//
+//	保留此包是因为某些运营场景可能需要发外部邮件（如新版本通知）
+//
+// 来源：从开源项目 jordan-wright/email 移植 项目作者保留以备使用
 package email
 
 import (

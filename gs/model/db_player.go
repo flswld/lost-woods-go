@@ -7,17 +7,37 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
+// 玩家档根模型 - hk4e 项目最核心的数据结构
+//
+// 设计要点（详见 CLAUDE.md "数据模型"）：
+//   - **离线数据**：bson 持久化字段 + 子模型指针 是玩家档的"主体"
+//   - **在线数据**：`bson:"-" msgpack:"-"` 标签 不持久化 仅运行时使用
+//   - **特殊数据**：聊天/邮件/场景区块 → 仅 DB 不进 Redis（不属于热数据）
+//
+// 子模型按业务拆分（不嵌入而是子字段挂载）：
+//   - DbSocial / DbItem / DbAvatar / DbTeam / DbWeapon / DbReliquary / DbGacha / DbQuest / DbWorld
+//
+// 序列化双标签：
+//   - bson: MongoDB 用（保留字段名）
+//   - msgpack: Redis 缓存用（紧凑二进制 + LZ4 压缩 详见 dao/player_redis.go）
+//
+// 在线/离线字段区分约定：
+//   - 修改 db_player.go 时如果加纯运行时字段 必加 `bson:"-" msgpack:"-"`
+//   - 否则会被序列化进存档导致兼容性问题
+
+// DbState 玩家档状态机（详见 CLAUDE.md "DbState 状态机"）
 const (
-	DbNone = iota
-	DbInsert
-	DbDelete
-	DbNormal
+	DbNone   = iota // 未持久化（不应出现 调试时表示初始化阶段）
+	DbInsert        // 新玩家 首次需 INSERT 入库
+	DbDelete        // 角色删除标记 后续操作扣除该玩家
+	DbNormal        // 正常态 后续 UPDATE 入库
 )
 
+// SceneLoadState 场景加载状态（4 步状态机的 3 个关键节点）
 const (
-	SceneNone = iota
-	SceneInitFinish
-	SceneEnterDone
+	SceneNone       = iota // 未加载（EnterSceneReadyReq 后 等基础数据下发）
+	SceneInitFinish        // 已初始化（SceneInitFinishReq 后 等实体数据下发）
+	SceneEnterDone         // 已进入（EnterSceneDoneReq 后 之后才能切角色/打怪/接任务）
 )
 
 type GameObject interface {

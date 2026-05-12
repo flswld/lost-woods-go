@@ -1,5 +1,28 @@
 package dao
 
+// MongoDB 实现 - 玩家档持久化层（DB 三选一之一）+ DAO 顶层入口
+//
+// **本文件的方法是 DAO 层对外 API 的"实际入口"**：
+//   - 顶层方法（InsertPlayer/QueryPlayerById/...）首先判断 d.mongo == nil
+//     · nil → 转发到 player_gorm.go 的 Gorm 版（MySQL/SQLite）
+//     · 非 nil → 走 Mongo 实际逻辑
+//   - 这个分支是 Gorm/Mongo 二选一的实现切换点（dao.go:62-122 根据 url 前缀创建实例）
+//
+// **MongoDB 与 GORM 关键差异**：
+//   - GORM 把 Player 对象 msgpack 序列化成 BLOB 整存（玩家档与表结构解耦）
+//   - MongoDB 直接以 BSON 文档展开存（每个字段是 BSON key 利于查询/索引）
+//   - 实际上业务代码只按 player_id 主键查 没用上 Mongo 子字段查询的优势
+//   - 但跨服好友/聊天历史等场景下 Mongo 的 BSON 查询能力可以更灵活
+//
+// 集合名（不像 GORM 走 TableName() 方法 这里硬编码）：
+//   - "player"      玩家档（按 player_id 字段查询 注意不是 _id）
+//   - "chat_msg"    聊天记录
+//   - "scene_block" 场景区块存档
+//
+// **注意**：QueryChatMsgListByUid 这里的 Mongo 实现用 $and/$or 显式分组
+//   是正确的 (to_uid=u OR uid=u) AND is_delete=false 逻辑
+//   而 GORM 版有 SQL 优先级 bug（详见 player_gorm.go QueryChatMsgListByUidGorm）
+
 import (
 	"context"
 	"errors"
@@ -12,7 +35,7 @@ import (
 )
 
 const (
-	MaxQueryChatMsgLen = 1000 // 最大可查询聊天记录条数
+	MaxQueryChatMsgLen = 1000 // 单次最多查询聊天记录条数 防超长历史拖垮 DB
 )
 
 func (d *Dao) InsertPlayer(player *model.Player) error {

@@ -20,6 +20,18 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// Controller dispatch HTTP 服务控制器
+//
+// 字段：
+//   - db: SDK 账号 DB（账号-密码-token 表）+ Sdk 主键自增（standalone 模式用）
+//   - signRsaKey: 区服签名密钥（v2.7.5+ 客户端要求 region 响应必须签名）
+//   - encRsaKeyMap: 5 套区服加密密钥（KeyId 1~5）让客户端 region 响应加密传输
+//   - pwdRsaKey: 账号密码 RSA 解密私钥（客户端用对应公钥加密密码 dispatch 解密）
+//   - ec2b: dispatch ↔ gate 之间的 ec2b 密钥（与 client 协商时下发）
+//   - gateServerMap: 已登录玩家 token 缓存（apiVerify → v2Login → gateTokenVerify 三步用同一 token）
+//   - stopServerInfo: 停服信息
+//   - whiteList: 停服期间白名单
+//   - nextSdkAccountId: SDK 账号自增 id（standalone 模式持久化到 sdk 表）
 type Controller struct {
 	db               *dao.Dao
 	discoveryClient  *rpc.DiscoveryClient
@@ -100,6 +112,25 @@ func (c *Controller) Close() {
 	}
 }
 
+// registerRouter 注册所有 HTTP 路由（gin 引擎）
+//
+// 路由分 6 组：
+//  1. 调度（一/二级 dispatch）：客户端启动时第一批请求
+//     · query_security_file: 安全文件下发
+//     · query_region_list: 一级 dispatch 返回区服列表
+//     · query_cur_region: 二级 dispatch 返回 gate 地址 + region 加密配置
+//  2. 登录：账号-密码 → token → ComboToken 三段式
+//     · /hk4e_:name/mdk/shield/api/login: 账号-密码登录拿 Token
+//     · /hk4e_:name/mdk/shield/api/verify: Token 续期验证
+//     · /hk4e_:name/combo/granter/login/v2/login: Token → ComboToken 交换
+//  3. 日志：客户端崩溃日志/性能日志/SDK 日志（仅记录不返回真实数据）
+//  4. 收集数据：device-fp 设备指纹（反作弊用 项目不强制）
+//  5. 返回固定数据：协议版本/SDK config/字体下发等（占位让客户端不报错）
+//  6. 静态资源：mi18n 多语言文件 + geetest 验证码资源
+//
+// /gate/token/verify 是 Gate 内部调用接口（验证客户端 ComboToken）
+//
+// 404 fallback：返回 "FUCK MHY"（作者中二风格的错误页 防止客户端发到不存在的路由报错）
 func (c *Controller) registerRouter() {
 	if logger.GetConfig().Level == logger.DEBUG {
 		gin.SetMode(gin.DebugMode)

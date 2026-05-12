@@ -8,6 +8,7 @@ import "server_only/redis_data.proto";
 
 option go_package = "./;proto";
 
+// 发邮件
 message AddRedisMailReq {
     enum CmdId {
         NONE = 0;
@@ -16,7 +17,7 @@ message AddRedisMailReq {
 
     MailAddOpType op_type = 1;
     MailBin mail_bin = 2;
-    string ticket = 3;
+    string ticket = 3; // 外部邮件需要带ticket
     string transaction = 4;
 }
 
@@ -32,6 +33,7 @@ message AddRedisMailRsp {
     string transaction = 4;
 }
 
+// 删除邮件
 message DelRedisMailReq {
     enum CmdId {
         NONE = 0;
@@ -54,6 +56,7 @@ message DelRedisMailRsp {
     repeated uint32 mail_id_list = 3;
 }
 
+// 拉取邮件
 message GetRedisMailReq {
     enum CmdId {
         NONE = 0;
@@ -83,6 +86,7 @@ message GetRedisMailRsp {
     uint32 total_page_count = 9;
 }
 
+// 邮件变化通知
 message RedisMailChangeNotify {
     enum CmdId {
         NONE = 0;
@@ -93,6 +97,7 @@ message RedisMailChangeNotify {
     repeated uint32 del_mail_id_list = 2;
 }
 
+// 发送offlinemsg
 message SendOfflineMsgReq {
     enum CmdId {
         NONE = 0;
@@ -112,6 +117,7 @@ message SendOfflineMsgRsp {
     string ticket = 2;
 }
 
+// multi通知game有新的离线消息
 message NewOfflineMsgNotify {
     enum CmdId {
         NONE = 0;
@@ -119,13 +125,14 @@ message NewOfflineMsgNotify {
     }
 }
 
+// game向multi拉取新的离线消息
 message GetOfflineMsgReq {
     enum CmdId {
         NONE = 0;
         CMD_ID = 10331;
     }
 
-    uint32 index = 1;
+    uint32 index = 1; // game已经处理的最大编号
     bool is_login = 2;
 }
 
@@ -136,20 +143,22 @@ message GetOfflineMsgRsp {
     }
 
     int32 retcode = 1;
-    uint32 last_index = 2;
-    repeated OfflineMsgBin offline_msg_list = 3;
+    uint32 last_index = 2;                       // req中的index
+    repeated OfflineMsgBin offline_msg_list = 3; // 离线消息列表
     bool is_login = 4;
 }
 
+// 移除redis中已经处理的消息
 message RemoveOfflineMsgNotify {
     enum CmdId {
         NONE = 0;
         CMD_ID = 10348;
     }
 
-    uint32 index = 1;
+    uint32 index = 1; // game已经处理的最大编号
 }
 
+// 清除redis里面的消息，一般是GM指令
 message ClearOfflineMsgNotify {
     enum CmdId {
         NONE = 0;
@@ -157,6 +166,7 @@ message ClearOfflineMsgNotify {
     }
 }
 
+// 更新邮件
 message UpdateRedisMailReq {
     enum CmdId {
         NONE = 0;
@@ -178,6 +188,7 @@ message UpdateRedisMailRsp {
     repeated uint32 mail_id_list = 3;
 }
 
+// 查询邮件transaction状态
 message GetRedisMailTransactionStatusReq {
     enum CmdId {
         NONE = 0;
@@ -197,6 +208,7 @@ message GetRedisMailTransactionStatusRsp {
     map<string, bool> transaction_status_map = 2;
 }
 
+// 整理邮件通知
 message ClearUpRedisMailNotify {
     enum CmdId {
         NONE = 0;
@@ -204,6 +216,7 @@ message ClearUpRedisMailNotify {
     }
 }
 
+// 清空所有邮件
 message CleanRedisMailNotify {
     enum CmdId {
         NONE = 0;
@@ -211,6 +224,7 @@ message CleanRedisMailNotify {
     }
 }
 
+// gameserver邮件补单
 message ResendRedisMailReq {
     enum CmdId {
         NONE = 0;

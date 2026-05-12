@@ -9,6 +9,13 @@ import (
 )
 
 // 本地事件队列管理器
+//
+// 异步IO同步化的核心机制：
+//   1. 主循环单线程执行 任何阻塞IO都会卡死整个GS
+//   2. 解决方案：阻塞IO在goroutine内执行 完成后通过 LocalEventChan 回主循环
+//   3. 主循环在 select 中接收 LocalEvent 调用 LocalEventHandle 分发到具体业务函数
+//
+// 每个事件类型代表一个完整的"异步操作完成"事件 业务函数在主循环单线程内安全访问玩家数据
 
 const (
 	UserLoginLoadFromDbFinish  = iota // 玩家登录从数据库加载完成回调
@@ -20,11 +27,13 @@ const (
 	AsyncLoadSceneBlockFinish         // 异步加载场景区块存档完成
 )
 
+// LocalEvent 本地事件消息体 EventId定事件类型 Msg是事件携带的具体数据
 type LocalEvent struct {
 	EventId int
 	Msg     any
 }
 
+// LocalEventManager 持有事件队列channel（缓冲1000） 主循环通过 GetLocalEventChan 接收
 type LocalEventManager struct {
 	localEventChan chan *LocalEvent
 }
@@ -39,6 +48,9 @@ func (l *LocalEventManager) GetLocalEventChan() chan *LocalEvent {
 	return l.localEventChan
 }
 
+// LocalEventHandle 主循环select分发事件到具体业务函数
+// 每个case对应一种异步IO完成 内部调用主循环单线程内的业务方法
+// 注意 ExitRunUserCopyAndSave 的最后会 select{} 永久阻塞主循环 等进程退出
 func (l *LocalEventManager) LocalEventHandle(localEvent *LocalEvent) {
 	switch localEvent.EventId {
 	case UserLoginLoadFromDbFinish:

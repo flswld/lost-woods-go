@@ -15,11 +15,26 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// gate请求错误响应
+// gateTokenVerify 接口实现 - Gate 内部调用验证 ComboToken
+//
+// 流程：玩家通过 KCP 连到 Gate 后 Gate 用 doGateLogin → POST /gate/token/verify 验证 ComboToken
+// 同时 Gate 会用 LoginSdkAccountKey HMAC-SHA256 算签名 防止伪造请求
+//
+// 校验：
+//   1. HMAC 签名匹配（防伪造）
+//   2. ComboToken 与 DB 一致
+//   3. ComboToken 创建时间不超过 24 小时（比 Token 的 7 天短 防止长期会话被劫持）
+
+// gateReqErrorRsp gate 请求错误响应
 func (c *Controller) gateReqErrorRsp(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{"retcode": -101, "message": "系统错误", "data": nil})
 }
 
+// TokenVerifyReq Gate → Dispatch 的 ComboToken 验证请求
+//   - AppID/ChannelID: 平台标识（hk4e=1）
+//   - OpenID: 玩家账号 ID（其实是 SdkAccount.AccountId 字符串形式）
+//   - ComboToken: 客户端通过 KCP 提交的 token 由 Dispatch 验证
+//   - Sign: HMAC-SHA256(LoginSdkAccountKey, "app_id=1&channel_id=1&combo_token=...&open_id=...") 防伪造
 type TokenVerifyReq struct {
 	AppID      uint32 `json:"app_id"`
 	ChannelID  uint32 `json:"channel_id"`
@@ -42,6 +57,8 @@ type TokenVerifyRsp struct {
 	} `json:"data"`
 }
 
+// gateTokenVerify ComboToken 验证接口（POST /gate/token/verify）
+// 仅供 Gate 内部调用 通过 LoginSdkAccountKey 共享密钥做 HMAC 防止外部伪造
 func (c *Controller) gateTokenVerify(ctx *gin.Context) {
 	tokenVerifyReq := new(TokenVerifyReq)
 	err := ctx.ShouldBindJSON(tokenVerifyReq)

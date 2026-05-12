@@ -11,9 +11,24 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
+// 装备穿戴 模块
+//
+// 装备分两类：武器（Weapon）+ 圣遗物（Reliquary）
+// 角色的装备槽位：1 把武器 + 5 件圣遗物（花/羽/沙/杯/冠）
+//
+// 三个核心请求：
+//   - SetEquipLockStateReq: 上锁/解锁（防止误销毁/误作精炼素材）
+//   - TakeoffEquipReq: 卸下圣遗物（武器不能空槽 必须用 WearEquip 替换）
+//   - WearEquipReq: 穿戴武器/圣遗物
+//
+// 装备交换的复杂逻辑：
+//   - 武器在另一个角色身上 → 双向交换（A 装备 B 的武器 同时把 A 原武器给 B）
+//   - 圣遗物在另一个角色身上 → 同样双向交换 但圣遗物可以被卸下放回背包
+
 /************************************************** 接口请求 **************************************************/
 
-// SetEquipLockStateReq 设置装备上锁状态请求
+// SetEquipLockStateReq 装备上锁/解锁请求（武器和圣遗物通用）
+// 上锁后该装备不能被销毁/作精炼素材/作圣遗物升级素材 防止玩家误操作
 func (g *Game) SetEquipLockStateReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.SetEquipLockStateReq)
 
@@ -48,7 +63,9 @@ func (g *Game) SetEquipLockStateReq(player *model.Player, payloadMsg pb.Message)
 	g.SendMsg(cmd.SetEquipLockStateRsp, player.PlayerId, player.ClientSeq, setEquipLockStateRsp)
 }
 
-// TakeoffEquipReq 装备卸下请求
+// TakeoffEquipReq 卸下圣遗物请求
+// 武器不能卸下（角色必须有武器才能战斗）→ 客户端不会发武器的 TakeoffEquipReq
+// 卸下后调 UpdatePlayerAvatarFightProp 重算面板（少了圣遗物的副词条）
 func (g *Game) TakeoffEquipReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.TakeoffEquipReq)
 
@@ -82,7 +99,14 @@ func (g *Game) TakeoffEquipReq(player *model.Player, payloadMsg pb.Message) {
 	g.SendMsg(cmd.TakeoffEquipRsp, player.PlayerId, player.ClientSeq, takeoffEquipRsp)
 }
 
-// WearEquipReq 穿戴装备请求
+// WearEquipReq 穿戴装备请求（武器和圣遗物通用）
+//
+// 武器特殊校验：weaponConfig.EquipType 必须等于 avatarConfig.WeaponType
+//
+//	防止单手剑角色装上双手剑（客户端理论上也不会发但服务端兜底校验）
+//
+// 圣遗物自动按 ReliquaryType（1=花/2=羽/3=沙/4=杯/5=冠）放到对应槽位
+// 装备完成后必须调 UpdatePlayerAvatarFightProp 重算面板
 func (g *Game) WearEquipReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.WearEquipReq)
 
@@ -142,7 +166,20 @@ func (g *Game) WearEquipReq(player *model.Player, payloadMsg pb.Message) {
 
 /************************************************** 游戏功能 **************************************************/
 
-// WearPlayerAvatarReliquary 玩家角色装备圣遗物
+// WearPlayerAvatarReliquary 玩家角色装备圣遗物（核心交换逻辑）
+//
+// 三种情况：
+//  1. 圣遗物在别的角色身上 + 当前角色对应槽位有装备：
+//     · 卸下当前角色已装备的圣遗物
+//     · 把对方角色卸下目标圣遗物
+//     · 把"当前角色卸下的圣遗物"装到对方角色对应槽位（避免对方空一格）
+//     · 把目标圣遗物装到当前角色
+//  2. 圣遗物在别的角色身上 + 当前角色对应槽位无装备：
+//     · 直接从对方角色卸下 → 装到当前角色（对方留空）
+//  3. 圣遗物在背包 + 当前角色对应槽位有装备：
+//     · 卸下当前角色的圣遗物（自动放回背包）→ 装上目标圣遗物
+//
+// 注意：通知会同时发给"装备调整后的两个角色"双方
 func (g *Game) WearPlayerAvatarReliquary(userId uint32, avatarId uint32, reliquaryId uint64) {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {
@@ -201,7 +238,15 @@ func (g *Game) WearPlayerAvatarReliquary(userId uint32, avatarId uint32, reliqua
 	g.SendMsg(cmd.AvatarEquipChangeNotify, userId, player.ClientSeq, avatarEquipChangeNotify)
 }
 
-// WearPlayerAvatarWeapon 玩家角色装备武器
+// WearPlayerAvatarWeapon 玩家角色装备武器（与圣遗物略有不同）
+//
+// 武器关键约束：**武器不能空** 角色必须有武器才能战斗
+// 所以武器交换时必须确保两边都有武器才能交换：
+//  1. 武器在别的角色身上 + 当前角色有武器：双向交换两人各自的武器
+//  2. 武器在背包 + 当前角色有武器：卸下当前武器（放回背包）→ 装上目标武器
+//  3. 角色没有武器（如 AddPlayerAvatar 的初始状态）：直接装备目标武器
+//
+// 装备后场景中的武器实体也要更新 → 走 PacketAvatarEquipChangeNotifyByWeapon 带 entityId
 func (g *Game) WearPlayerAvatarWeapon(userId uint32, avatarId uint32, weaponId uint64) {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {

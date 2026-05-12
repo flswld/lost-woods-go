@@ -1,3 +1,5 @@
+// 角色相关协议
+
 syntax = "proto3";
 
 package proto;
@@ -6,6 +8,7 @@ import "define.proto";
 
 option go_package = "./;proto";
 
+// 玩家的角色增加通知
 message AvatarAddNotify {
     enum CmdId {
         option allow_alias = true;
@@ -15,10 +18,11 @@ message AvatarAddNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    AvatarInfo avatar = 13;
+    AvatarInfo avatar = 13; // 新增角色
     bool is_in_team = 12;
 }
 
+// 玩家的角色删除通知(仅用于测试)
 message AvatarDelNotify {
     enum CmdId {
         option allow_alias = true;
@@ -28,14 +32,16 @@ message AvatarDelNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    repeated uint64 avatar_guid_list = 13;
+    repeated uint64 avatar_guid_list = 13; // 删除角色列表
 }
 
+// 角色队伍
 message AvatarTeam {
-    repeated uint64 avatar_guid_list = 7;
+    repeated uint64 avatar_guid_list = 7; // 角色列表
     string team_name = 14;
 }
 
+// 设置角色队伍
 message SetUpAvatarTeamReq {
     enum CmdId {
         option allow_alias = true;
@@ -46,9 +52,9 @@ message SetUpAvatarTeamReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 team_id = 3;
-    repeated uint64 avatar_team_guid_list = 7;
-    uint64 cur_avatar_guid = 5;
+    uint32 team_id = 3;                        // 队伍ID
+    repeated uint64 avatar_team_guid_list = 7; // 队伍成员
+    uint64 cur_avatar_guid = 5;                // 当前上场角色, 设置当前队伍时需要使用
 }
 
 message SetUpAvatarTeamRsp {
@@ -60,12 +66,13 @@ message SetUpAvatarTeamRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    repeated uint64 avatar_team_guid_list = 1;
-    uint32 team_id = 6;
+    repeated uint64 avatar_team_guid_list = 1; // 队伍成员
+    uint32 team_id = 6;                        // 队伍ID
     int32 retcode = 8;
-    uint64 cur_avatar_guid = 13;
+    uint64 cur_avatar_guid = 13;               // 当前上场角色, 设置当前队伍时需要使用
 }
 
+// 选择当前出战的队伍, 默认切换成第一个角色
 message ChooseCurAvatarTeamReq {
     enum CmdId {
         option allow_alias = true;
@@ -76,7 +83,7 @@ message ChooseCurAvatarTeamReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 team_id = 9;
+    uint32 team_id = 9; // 队伍ID
 }
 
 message ChooseCurAvatarTeamRsp {
@@ -88,10 +95,11 @@ message ChooseCurAvatarTeamRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 cur_team_id = 1;
+    uint32 cur_team_id = 1; // 当前出战的队伍ID
     int32 retcode = 14;
 }
 
+// 更换角色
 message ChangeAvatarReq {
     enum CmdId {
         option allow_alias = true;
@@ -103,8 +111,8 @@ message ChangeAvatarReq {
     }
 
     Vector move_pos = 15;
-    uint32 skill_id = 2;
-    uint64 guid = 7;
+    uint32 skill_id = 2; // 换人技能ID
+    uint64 guid = 7;     // 角色的唯一ID
     bool is_move = 10;
 }
 
@@ -117,11 +125,12 @@ message ChangeAvatarRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 skill_id = 3;
+    uint32 skill_id = 3; // 换人技能ID
     int32 retcode = 10;
-    uint64 cur_guid = 4;
+    uint64 cur_guid = 4; // 当前的角色
 }
 
+// 角色突破
 message AvatarPromoteReq {
     enum CmdId {
         option allow_alias = true;
@@ -132,7 +141,7 @@ message AvatarPromoteReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint64 guid = 5;
+    uint64 guid = 5; // 角色的guid
 }
 
 message AvatarPromoteRsp {
@@ -144,10 +153,11 @@ message AvatarPromoteRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint64 guid = 11;
+    uint64 guid = 11; // 角色的guid
     int32 retcode = 8;
 }
 
+// 泉水使用
 message SpringUseReq {
     enum CmdId {
         option allow_alias = true;
@@ -158,7 +168,7 @@ message SpringUseReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint64 guid = 11;
+    uint64 guid = 11; // 角色的guid
 }
 
 message SpringUseRsp {
@@ -170,10 +180,11 @@ message SpringUseRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint64 guid = 3;
+    uint64 guid = 3; // 角色的guid
     int32 retcode = 7;
 }
 
+// 刷新后台角色
 message RefreshBackgroundAvatarReq {
     enum CmdId {
         option allow_alias = true;
@@ -194,10 +205,11 @@ message RefreshBackgroundAvatarRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    map<uint64, uint32> hp_full_time_map = 15;
+    map<uint64, uint32> hp_full_time_map = 15; // 各个血量不满的角色回满血的剩余时间(单位：秒)
     int32 retcode = 3;
 }
 
+// 差量同步角色保存的队伍
 message AvatarTeamUpdateNotify {
     enum CmdId {
         option allow_alias = true;
@@ -207,10 +219,11 @@ message AvatarTeamUpdateNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    map<uint32, AvatarTeam> avatar_team_map = 2;
-    repeated uint64 temp_avatar_guid_list = 13;
+    map<uint32, AvatarTeam> avatar_team_map = 2; // 所有保存的角色队伍
+    repeated uint64 temp_avatar_guid_list = 13;  // 临时队伍 guid列表, 上场时会和当前队伍拼在一起
 }
 
+// 角色数据全量推送 S->C
 message AvatarDataNotify {
     enum CmdId {
         option allow_alias = true;
@@ -221,16 +234,17 @@ message AvatarDataNotify {
     }
 
     repeated uint32 backup_avatar_team_order_list = 9;
-    repeated uint64 temp_avatar_guid_list = 12;
-    repeated AvatarInfo avatar_list = 6;
-    uint32 cur_avatar_team_id = 2;
+    repeated uint64 temp_avatar_guid_list = 12;  // 临时队伍中的角色GUID
+    repeated AvatarInfo avatar_list = 6;         // 所有角色的列表
+    uint32 cur_avatar_team_id = 2;               // 当前出战的队伍ID
     repeated AvatarRenameInfo avatar_rename_list = 4;
     repeated uint32 owned_flycloak_list = 1;
     repeated uint32 owned_costume_list = 11;
-    map<uint32, AvatarTeam> avatar_team_map = 7;
-    uint64 choose_avatar_guid = 8;
+    map<uint32, AvatarTeam> avatar_team_map = 7; // 所有的角色队伍
+    uint64 choose_avatar_guid = 8;               // 一开始选择的角色
 }
 
+// 角色升级协议
 message AvatarUpgradeReq {
     enum CmdId {
         option allow_alias = true;
@@ -241,11 +255,12 @@ message AvatarUpgradeReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint64 avatar_guid = 6;
-    uint32 count = 2;
-    uint32 item_id = 5;
+    uint64 avatar_guid = 6; // 道具使用的目标角色
+    uint32 count = 2;       // 使用个数(只针对可堆叠类道具)
+    uint32 item_id = 5;     // 经验材料ID
 }
 
+// 角色升级响应
 message AvatarUpgradeRsp {
     enum CmdId {
         option allow_alias = true;
@@ -255,14 +270,15 @@ message AvatarUpgradeRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 cur_level = 6;
-    uint32 old_level = 13;
-    map<uint32, float> old_fight_prop_map = 10;
+    uint32 cur_level = 6;                       // 升级后等级
+    uint32 old_level = 13;                      // 升级前等级
+    map<uint32, float> old_fight_prop_map = 10; // 升级前的战斗属性
     int32 retcode = 1;
-    map<uint32, float> cur_fight_prop_map = 4;
-    uint64 avatar_guid = 15;
+    map<uint32, float> cur_fight_prop_map = 4;  // 升级后的战斗属性
+    uint64 avatar_guid = 15;                    // 唯一ID
 }
 
+// 角色死亡并播完死亡动画后，请求服务器更换新角色
 message AvatarDieAnimationEndReq {
     enum CmdId {
         option allow_alias = true;
@@ -273,9 +289,9 @@ message AvatarDieAnimationEndReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    Vector reborn_pos = 3;
-    uint64 die_guid = 7;
-    uint32 skill_id = 8;
+    Vector reborn_pos = 3; // 重生位置(客户端选择)
+    uint64 die_guid = 7;   // 死亡的角色
+    uint32 skill_id = 8;   // 换人技能ID
 }
 
 message AvatarDieAnimationEndRsp {
@@ -287,11 +303,12 @@ message AvatarDieAnimationEndRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 skill_id = 13;
+    uint32 skill_id = 13; // 换人技能ID, 来自req
     int32 retcode = 14;
-    uint64 die_guid = 15;
+    uint64 die_guid = 15; // 死亡的角色, 来自req
 }
 
+// avatar元素类型切换
 message AvatarChangeElementTypeReq {
     enum CmdId {
         option allow_alias = true;
@@ -327,7 +344,7 @@ message AvatarFetterDataNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    map<uint64, AvatarFetterInfo> fetter_info_map = 15;
+    map<uint64, AvatarFetterInfo> fetter_info_map = 15; // 羁绊信息
 }
 
 message AvatarExpeditionDataNotify {
@@ -339,7 +356,7 @@ message AvatarExpeditionDataNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    map<uint64, AvatarExpeditionInfo> expedition_info_map = 6;
+    map<uint64, AvatarExpeditionInfo> expedition_info_map = 6; // 羁绊信息
 }
 
 message AvatarExpeditionAllDataReq {
@@ -362,10 +379,10 @@ message AvatarExpeditionAllDataRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    repeated uint32 open_expedition_list = 3;
+    repeated uint32 open_expedition_list = 3;                  // 开启的线路
     int32 retcode = 15;
-    uint32 expedition_count_limit = 12;
-    map<uint64, AvatarExpeditionInfo> expedition_info_map = 4;
+    uint32 expedition_count_limit = 12;                        // 探索数量限制
+    map<uint64, AvatarExpeditionInfo> expedition_info_map = 4; // 羁绊信息
 }
 
 message AvatarExpeditionStartReq {
@@ -392,7 +409,7 @@ message AvatarExpeditionStartRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    map<uint64, AvatarExpeditionInfo> expedition_info_map = 2;
+    map<uint64, AvatarExpeditionInfo> expedition_info_map = 2; // 羁绊信息
     int32 retcode = 5;
 }
 
@@ -418,7 +435,7 @@ message AvatarExpeditionCallBackRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    map<uint64, AvatarExpeditionInfo> expedition_info_map = 9;
+    map<uint64, AvatarExpeditionInfo> expedition_info_map = 9; // 羁绊信息
     int32 retcode = 5;
 }
 
@@ -446,7 +463,7 @@ message AvatarExpeditionGetRewardRsp {
 
     repeated ItemParam extra_item_list = 9;
     repeated ItemParam item_list = 8;
-    map<uint64, AvatarExpeditionInfo> expedition_info_map = 12;
+    map<uint64, AvatarExpeditionInfo> expedition_info_map = 12; // 羁绊信息
     int32 retcode = 2;
 }
 
@@ -478,6 +495,7 @@ message ChangeMpTeamAvatarRsp {
     uint64 cur_avatar_guid = 13;
 }
 
+// 更改队伍名称请求
 message ChangeTeamNameReq {
     enum CmdId {
         option allow_alias = true;
@@ -508,23 +526,27 @@ message ChangeTeamNameRsp {
 
 message SceneTeamAvatar {
     AbilitySyncStateInfo avatar_ability_info = 5;
+    // 联机时候才需要使用的一些角色信息,
+    // TODO: 精简整理
     AvatarInfo avatar_info = 8;
     bool is_on_scene = 152;
-    uint32 entity_id = 9;
-    uint64 avatar_guid = 15;
-    uint32 scene_id = 1;
+    uint32 entity_id = 9;    // 角色在所处场景上的EntityId
+    uint64 avatar_guid = 15; // 角色Guid
+    uint32 scene_id = 1;     // 角色所处场景ID
     uint32 weapon_entity_id = 7;
     SceneAvatarInfo scene_avatar_info = 3;
     uint64 weapon_guid = 4;
     AbilitySyncStateInfo weapon_ability_info = 11;
     SceneEntityInfo scene_entity_info = 12;
-    uint32 player_uid = 14;
+    uint32 player_uid = 14;  // 玩家uid
     bool is_reconnect = 6;
     AbilityControlBlock ability_control_block = 2;
     bool is_player_cur_avatar = 13;
     repeated ServerBuff server_buff_list = 10;
 }
 
+// 全量同步
+// 发给玩家当前使用的场景队伍
 message SceneTeamUpdateNotify {
     enum CmdId {
         option allow_alias = true;
@@ -535,9 +557,10 @@ message SceneTeamUpdateNotify {
     }
 
     repeated SceneTeamAvatar scene_team_avatar_list = 11;
-    bool is_in_mp = 15;
+    bool is_in_mp = 15; // 是否在联机中
 }
 
+// 关注avatar（类似于置顶）
 message FocusAvatarReq {
     enum CmdId {
         option allow_alias = true;
@@ -549,7 +572,7 @@ message FocusAvatarReq {
     }
 
     uint64 avatar_guid = 1;
-    bool is_focus = 8;
+    bool is_focus = 8; // 是否是关注状态
 }
 
 message FocusAvatarRsp {
@@ -562,7 +585,7 @@ message FocusAvatarRsp {
     }
 
     int32 retcode = 5;
-    bool is_focus = 11;
+    bool is_focus = 11; // 是否是关注状态
     uint64 avatar_guid = 4;
 }
 

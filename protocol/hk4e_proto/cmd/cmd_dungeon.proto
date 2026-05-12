@@ -1,3 +1,5 @@
+// 副本协议
+
 syntax = "proto3";
 
 package proto;
@@ -16,13 +18,14 @@ enum WindFieldDungeonFailReason {
     WIND_FIELD_DUNGEON_FAIL_LUA_INTERRUPT = 4;
 }
 
+// 地城通知数据类型
 enum DungeonDataType {
     DUNGEON_DATA_NONE = 0;
-    DUNGEON_DATA_END_TIME = 1;
-    DUNGEON_DATA_MONSTER_DIE_COUNT = 2;
-    DUNGEON_DATA_LEVEL_CONFIG_ID = 3;
-    DUNGEON_DATA_TOWER_MONTHLY_LEVEL_CONFIG_ID = 4;
-    DUNGEON_DATA_TOWER_FLOOR_LEVEL_CONFIG_ID = 5;
+    DUNGEON_DATA_END_TIME = 1;                      // 限时副本的结束时间
+    DUNGEON_DATA_MONSTER_DIE_COUNT = 2;             // 已经杀死的怪物数量
+    DUNGEON_DATA_LEVEL_CONFIG_ID = 3;               // 挑战组合ID里面包含LeveEntityConfig
+    DUNGEON_DATA_TOWER_MONTHLY_LEVEL_CONFIG_ID = 4; // 爬塔月度挑战组合ID
+    DUNGEON_DATA_TOWER_FLOOR_LEVEL_CONFIG_ID = 5;   // 爬塔层挑战组合ID
 }
 
 enum ChallengeFinishType {
@@ -39,16 +42,17 @@ enum CustomDungeonFinishType {
     CUSTOM_DUNGEON_FINISH_SELF_PLAY_NORMAL = 3;
 }
 
+// 地城组队玩家离开原因
 enum DungeonCandidateTeamPlayerLeaveReason {
-    DUNGEON_CANDIDATE_TPLR_NORMAL = 0;
-    DUNGEON_CANDIDATE_TPLR_DIE = 1;
-    DUNGEON_CANDIDATE_TPLR_BE_KICK = 2;
-    DUNGEON_CANDIDATE_DISCONNECT = 3;
+    DUNGEON_CANDIDATE_TPLR_NORMAL = 0;  // 正常离开
+    DUNGEON_CANDIDATE_TPLR_DIE = 1;     // 死亡离开
+    DUNGEON_CANDIDATE_TPLR_BE_KICK = 2; // 被踢离开
+    DUNGEON_CANDIDATE_DISCONNECT = 3;   // 断线
 }
 
 enum DungeonCandidateTeamDismissReason {
-    DUNGEON_CANDIDATE_TPDR_NORMAL = 0;
-    DUNGEON_CANDIDATE_TPDR_DIE = 1;
+    DUNGEON_CANDIDATE_TPDR_NORMAL = 0; // 正常解散
+    DUNGEON_CANDIDATE_TPDR_DIE = 1;    // 死亡解散
     DUNGEON_CANDIDATE_TPDR_DISCONNECT = 2;
 }
 
@@ -58,6 +62,7 @@ enum DungeonRestartReason {
     DUNGEON_RESTART_REASON_DIE_RETRY = 2;
 }
 
+// 副本入口点信息请求
 message DungeonEntryInfoReq {
     enum CmdId {
         option allow_alias = true;
@@ -68,7 +73,7 @@ message DungeonEntryInfoReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 point_id = 2;
+    uint32 point_id = 2; // 副本入口点ID
     uint32 scene_id = 9;
     repeated Uint32Pair scene_point_id_list = 4;
 }
@@ -76,13 +81,13 @@ message DungeonEntryInfoReq {
 message DungeonEntryInfo {
     uint32 end_time = 6;
     uint32 dungeon_id = 5;
-    uint32 boss_chest_num = 12;
-    uint32 max_boss_chest_num = 13;
+    uint32 boss_chest_num = 12;     // boss地城当前领取boss宝箱数量
+    uint32 max_boss_chest_num = 13; // boss地城boss宝箱领取上限
     uint32 next_refresh_time = 11;
     WeeklyBossResinDiscountInfo weekly_boss_resin_discount_info = 9;
-    uint32 start_time = 15;
-    bool is_passed = 4;
-    uint32 left_times = 7;
+    uint32 start_time = 15;         // 如果是循环地城，会有进入时间限制
+    bool is_passed = 4;             // 是否通关
+    uint32 left_times = 7;          // 剩余副本次数 废弃, 等待客户端删除
 }
 
 message DungeonEntryPointInfo {
@@ -102,9 +107,9 @@ message DungeonEntryInfoRsp {
     }
 
     repeated DungeonEntryInfo dungeon_entry_list = 12;
-    uint32 point_id = 15;
+    uint32 point_id = 15;             // 副本入口点ID
     repeated DungeonEntryPointInfo dungeon_entry_point_list = 4;
-    uint32 recommend_dungeon_id = 14;
+    uint32 recommend_dungeon_id = 14; // 推荐副本ID
     int32 retcode = 11;
 }
 
@@ -113,6 +118,7 @@ message DungeonEnterPosInfo {
     uint32 point_id = 6;
 }
 
+// 玩家进入副本请求
 message PlayerEnterDungeonReq {
     enum CmdId {
         option allow_alias = true;
@@ -124,8 +130,8 @@ message PlayerEnterDungeonReq {
     }
 
     DungeonEnterPosInfo enter_pos_info = 2;
-    uint32 point_id = 13;
-    uint32 dungeon_id = 7;
+    uint32 point_id = 13;  // 副本入口点ID
+    uint32 dungeon_id = 7; // 玩家选择的副本ID
 }
 
 message PlayerEnterDungeonRsp {
@@ -137,11 +143,12 @@ message PlayerEnterDungeonRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 dungeon_id = 2;
-    uint32 point_id = 6;
+    uint32 dungeon_id = 2; // 玩家选择的副本ID
+    uint32 point_id = 6;   // 副本入口点ID
     int32 retcode = 5;
 }
 
+// 玩家离开副本请求
 message PlayerQuitDungeonReq {
     enum CmdId {
         option allow_alias = true;
@@ -153,7 +160,7 @@ message PlayerQuitDungeonReq {
     }
 
     bool is_quit_immediately = 10;
-    uint32 point_id = 7;
+    uint32 point_id = 7; // 副本离开点ID(主动离开填0)
 }
 
 message PlayerQuitDungeonRsp {
@@ -165,10 +172,11 @@ message PlayerQuitDungeonRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 point_id = 11;
+    uint32 point_id = 11; // 副本离开点ID(主动离开填0)
     int32 retcode = 7;
 }
 
+// 已激活的副本路点通知(S->C)
 message DungeonWayPointNotify {
     enum CmdId {
         option allow_alias = true;
@@ -178,10 +186,11 @@ message DungeonWayPointNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    bool is_add = 9;
-    repeated uint32 active_way_point_list = 4;
+    bool is_add = 9;                           // 是否为增加(否则为初始化时全量通知)
+    repeated uint32 active_way_point_list = 4; // 激活的副本路点列表
 }
 
+// 副本路点激活请求(激活后，会再广播一遍DungeonWayPointNotify)
 message DungeonWayPointActivateReq {
     enum CmdId {
         option allow_alias = true;
@@ -263,6 +272,7 @@ message TeamChainSettleInfo {
     bool is_new_record = 4;
 }
 
+// 副本结算通知
 message DungeonSettleNotify {
     enum CmdId {
         option allow_alias = true;
@@ -273,15 +283,15 @@ message DungeonSettleNotify {
     }
 
     uint32 result = 10;
-    uint32 dungeon_id = 13;
+    uint32 dungeon_id = 13;                 // 副本ID
     map<uint32, StrengthenPointData> strengthen_point_data_map = 14;
     repeated DungeonSettleExhibitionInfo exhibition_info_list = 8;
     uint32 create_player_uid = 12;
-    repeated uint32 fail_cond_list = 11;
+    repeated uint32 fail_cond_list = 11;    // 失败的通关条件索引
     uint32 use_time = 1;
-    uint32 close_time = 4;
-    bool is_success = 7;
-    map<uint32, ParamList> settle_show = 5;
+    uint32 close_time = 4;                  // 副本关闭时间戳
+    bool is_success = 7;                    // 是否成功通关
+    map<uint32, ParamList> settle_show = 5; // 结算显示数据(key:SettleShowType)
     oneof detail {
         TowerLevelEndNotify tower_level_end_notify = 351;
         TrialAvatarFirstPassDungeonNotify trial_avatar_first_pass_dungeon_notify = 635;
@@ -297,6 +307,7 @@ message DungeonSettleNotify {
     }
 }
 
+// 副本中玩家死亡通知(S->C)
 message DungeonPlayerDieNotify {
     enum CmdId {
         option allow_alias = true;
@@ -307,17 +318,18 @@ message DungeonPlayerDieNotify {
     }
 
     map<uint32, StrengthenPointData> strengthen_point_data_map = 15;
-    uint32 wait_time = 1;
-    uint32 dungeon_id = 9;
+    uint32 wait_time = 1;       // 等待时间(单位：秒)
+    uint32 dungeon_id = 9;      // 副本ID
     uint32 murderer_entity_id = 13;
-    PlayerDieType die_type = 3;
-    uint32 revive_count = 6;
+    PlayerDieType die_type = 3; // 最后一个avatar死亡类型
+    uint32 revive_count = 6;    // 已使用复活次数
     oneof entity {
-        uint32 monster_id = 4;
-        uint32 gadget_id = 8;
+        uint32 monster_id = 4;  // 被怪物杀死
+        uint32 gadget_id = 8;   // 被机关弄死
     }
 }
 
+// 副本死亡后选择复活方式
 message DungeonDieOptionReq {
     enum CmdId {
         option allow_alias = true;
@@ -342,10 +354,11 @@ message DungeonDieOptionRsp {
     }
 
     int32 retcode = 5;
-    uint32 revive_count = 10;
+    uint32 revive_count = 10; // 一共复活了多少次
     PlayerDieOption die_option = 6;
 }
 
+// 副本中显示提示通知(S->C)
 message DungeonShowReminderNotify {
     enum CmdId {
         option allow_alias = true;
@@ -355,9 +368,10 @@ message DungeonShowReminderNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 reminder_id = 9;
+    uint32 reminder_id = 9; // 提示ID
 }
 
+// 客户端判断玩家死亡(avatar全部死亡)
 message DungeonPlayerDieReq {
     enum CmdId {
         option allow_alias = true;
@@ -368,10 +382,11 @@ message DungeonPlayerDieReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    PlayerDieType die_type = 6;
-    uint32 dungeon_id = 8;
+    PlayerDieType die_type = 6; // 死亡类型, 只支持PLAYER_DIE_FALL, PLAYER_DIE_ABYSS
+    uint32 dungeon_id = 8;      // 副本ID
 }
 
+// 发送Rsp之前会先发送DungeonPlayerDieNotify
 message DungeonPlayerDieRsp {
     enum CmdId {
         option allow_alias = true;
@@ -396,6 +411,7 @@ message DungeonDataNotify {
     map<uint32, uint32> dungeon_data_map = 1;
 }
 
+// 进入地城挑战阶段的通知
 message DungeonChallengeBeginNotify {
     enum CmdId {
         option allow_alias = true;
@@ -406,9 +422,9 @@ message DungeonChallengeBeginNotify {
     }
 
     uint32 father_index = 5;
-    repeated uint32 param_list = 14;
-    uint32 challenge_index = 6;
-    uint32 challenge_id = 1;
+    repeated uint32 param_list = 14; // 挑战的参数
+    uint32 challenge_index = 6;      // 挑战编号
+    uint32 challenge_id = 1;         // 挑战ID
     uint32 group_id = 4;
     repeated uint32 uid_list = 12;
 }
@@ -431,6 +447,7 @@ message CustomDungeonResultInfo {
     bool is_stored = 14;
 }
 
+// 离开地城挑战阶段的通知
 message DungeonChallengeFinishNotify {
     enum CmdId {
         option allow_alias = true;
@@ -442,12 +459,12 @@ message DungeonChallengeFinishNotify {
 
     map<uint32, StrengthenPointData> strengthen_point_data_map = 13;
     ChallengeFinishType finish_type = 9;
-    bool is_new_record = 10;
-    uint32 challenge_record_type = 7;
+    bool is_new_record = 10;          // 是否刷新记录，用于展示
+    uint32 challenge_record_type = 7; // 挑战记录类型，DungeonExcelConfig.xml中的ChallengeRecordType，用于展示
     uint32 time_cost = 4;
-    uint32 current_value = 15;
-    bool is_success = 3;
-    uint32 challenge_index = 5;
+    uint32 current_value = 15;        // 新的值，用于展示
+    bool is_success = 3;              // 是否挑战成功
+    uint32 challenge_index = 5;       // 挑战编号
     oneof detail {
         ChannellerSlabLoopDungeonResultInfo channeller_slab_loop_dungeon_result_info = 1521;
         EffigyChallengeDungeonResultInfo effigy_challenge_dungeon_result_info = 1627;
@@ -456,6 +473,7 @@ message DungeonChallengeFinishNotify {
     }
 }
 
+// 地城挑战进度变化的通知
 message ChallengeDataNotify {
     enum CmdId {
         option allow_alias = true;
@@ -465,11 +483,12 @@ message ChallengeDataNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 value = 8;
-    uint32 challenge_index = 2;
-    uint32 param_index = 9;
+    uint32 value = 8;           // 参数的值（如果参数表示剩余时间，值是时间戳）
+    uint32 challenge_index = 2; // 挑战编号
+    uint32 param_index = 9;     // 这个挑战的第几个参数，从1开始
 }
 
+// 联机乱入副本进入推送
 message DungeonFollowNotify {
     enum CmdId {
         option allow_alias = true;
@@ -482,6 +501,7 @@ message DungeonFollowNotify {
     uint32 target_uid = 8;
 }
 
+// 玩家请求开启神像奖励
 message DungeonGetStatueDropReq {
     enum CmdId {
         option allow_alias = true;
@@ -493,6 +513,7 @@ message DungeonGetStatueDropReq {
     }
 }
 
+// 玩家开始神像奖励
 message DungeonGetStatueDropRsp {
     enum CmdId {
         option allow_alias = true;
@@ -505,13 +526,15 @@ message DungeonGetStatueDropRsp {
     int32 retcode = 12;
 }
 
+// 区域挑战记录数据
 message ChallengeRecord {
-    uint32 challenge_record_type = 14;
-    uint32 challenge_index = 15;
-    uint32 challenge_id = 1;
-    uint32 best_value = 8;
+    uint32 challenge_record_type = 14; // 挑战记录类型，DungeonExcelConfig.xml中的ChallengeRecordType
+    uint32 challenge_index = 15;       // 挑战index
+    uint32 challenge_id = 1;           // 挑战id
+    uint32 best_value = 8;             // 记录的值
 }
 
+// 区域挑战记录的通知
 message ChallengeRecordNotify {
     enum CmdId {
         option allow_alias = true;
@@ -522,14 +545,15 @@ message ChallengeRecordNotify {
     }
 
     uint32 group_id = 2;
-    repeated ChallengeRecord challenge_record_list = 5;
+    repeated ChallengeRecord challenge_record_list = 5; // 区域挑战记录
 }
 
 message DungeonCandidateTeamAvatar {
-    uint32 player_uid = 2;
-    AvatarInfo avatar_info = 6;
+    uint32 player_uid = 2;      // 所属玩家uid
+    AvatarInfo avatar_info = 6; // 角色信息 为空表示没有角色
 }
 
+// 地城组队信息通知 S -> C
 message DungeonCandidateTeamInfoNotify {
     enum CmdId {
         option allow_alias = true;
@@ -540,12 +564,13 @@ message DungeonCandidateTeamInfoNotify {
     }
 
     map<uint32, DungeonCandidateTeamPlayerState> player_state_map = 10;
-    uint32 dungeon_id = 9;
-    repeated uint32 ready_player_uid = 13;
+    uint32 dungeon_id = 9;                               // 地城配置ID
+    repeated uint32 ready_player_uid = 13;               // 已经准备的玩家
     uint32 match_type = 2;
-    repeated DungeonCandidateTeamAvatar avatar_list = 4;
+    repeated DungeonCandidateTeamAvatar avatar_list = 4; // 角色列表
 }
 
+// 地城邀请信息通知 S -> C
 message DungeonCandidateTeamInviteNotify {
     enum CmdId {
         option allow_alias = true;
@@ -555,11 +580,12 @@ message DungeonCandidateTeamInviteNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 player_uid = 5;
-    uint32 vaild_deadline_time_sec = 9;
-    uint32 dungeon_id = 6;
+    uint32 player_uid = 5;              // 邀请者
+    uint32 vaild_deadline_time_sec = 9; // 有效截至时间(秒)
+    uint32 dungeon_id = 6;              // 邀请地城配置ID
 }
 
+// 地城组队邀请拒绝通知 S -> C
 message DungeonCandidateTeamRefuseNotify {
     enum CmdId {
         option allow_alias = true;
@@ -569,9 +595,10 @@ message DungeonCandidateTeamRefuseNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 player_uid = 3;
+    uint32 player_uid = 3; // 拒绝者
 }
 
+// 地城组队玩家离开通知 S -> C
 message DungeonCandidateTeamPlayerLeaveNotify {
     enum CmdId {
         option allow_alias = true;
@@ -581,10 +608,11 @@ message DungeonCandidateTeamPlayerLeaveNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    DungeonCandidateTeamPlayerLeaveReason reason = 3;
-    uint32 player_uid = 13;
+    DungeonCandidateTeamPlayerLeaveReason reason = 3; // 离开原因
+    uint32 player_uid = 13;                           // 离开者
 }
 
+// 地城组队解散通知 S -> C
 message DungeonCandidateTeamDismissNotify {
     enum CmdId {
         option allow_alias = true;
@@ -594,10 +622,11 @@ message DungeonCandidateTeamDismissNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    DungeonCandidateTeamDismissReason reason = 9;
-    uint32 player_uid = 12;
+    DungeonCandidateTeamDismissReason reason = 9; // 解散原因
+    uint32 player_uid = 12;                       // 解散者
 }
 
+// 地城组队创建请求 C -> S
 message DungeonCandidateTeamCreateReq {
     enum CmdId {
         option allow_alias = true;
@@ -612,6 +641,7 @@ message DungeonCandidateTeamCreateReq {
     uint32 dungeon_id = 6;
 }
 
+// 地城组队创建响应 S -> C
 message DungeonCandidateTeamCreateRsp {
     enum CmdId {
         option allow_alias = true;
@@ -624,6 +654,7 @@ message DungeonCandidateTeamCreateRsp {
     int32 retcode = 1;
 }
 
+// 地城组队邀请请求 C -> S
 message DungeonCandidateTeamInviteReq {
     enum CmdId {
         option allow_alias = true;
@@ -637,6 +668,7 @@ message DungeonCandidateTeamInviteReq {
     repeated uint32 player_uids = 5;
 }
 
+// 地城组队创建响应 S -> C
 message DungeonCandidateTeamInviteRsp {
     enum CmdId {
         option allow_alias = true;
@@ -650,6 +682,7 @@ message DungeonCandidateTeamInviteRsp {
     repeated uint32 invalid_player_uids = 7;
 }
 
+// 地城组队踢人请求 C -> S
 message DungeonCandidateTeamKickReq {
     enum CmdId {
         option allow_alias = true;
@@ -663,6 +696,7 @@ message DungeonCandidateTeamKickReq {
     uint32 player_uid = 9;
 }
 
+// 地城组队踢人响应 S -> C
 message DungeonCandidateTeamKickRsp {
     enum CmdId {
         option allow_alias = true;
@@ -675,6 +709,7 @@ message DungeonCandidateTeamKickRsp {
     int32 retcode = 1;
 }
 
+// 地城组队离开请求 C -> S
 message DungeonCandidateTeamLeaveReq {
     enum CmdId {
         option allow_alias = true;
@@ -686,6 +721,7 @@ message DungeonCandidateTeamLeaveReq {
     }
 }
 
+// 地城组队离开响应 S -> C
 message DungeonCandidateTeamLeaveRsp {
     enum CmdId {
         option allow_alias = true;
@@ -698,6 +734,7 @@ message DungeonCandidateTeamLeaveRsp {
     int32 retcode = 14;
 }
 
+// 地城组队回复邀请请求 C -> S
 message DungeonCandidateTeamReplyInviteReq {
     enum CmdId {
         option allow_alias = true;
@@ -708,9 +745,10 @@ message DungeonCandidateTeamReplyInviteReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    bool is_accept = 5;
+    bool is_accept = 5; // 是否接受
 }
 
+// 地城组队回复邀请响应 S -> C
 message DungeonCandidateTeamReplyInviteRsp {
     enum CmdId {
         option allow_alias = true;
@@ -720,10 +758,11 @@ message DungeonCandidateTeamReplyInviteRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    bool is_trans_point = 4;
+    bool is_trans_point = 4; // 是否会传送到目标点
     int32 retcode = 2;
 }
 
+// 地城组队设置准备状态请求 C -> S
 message DungeonCandidateTeamSetReadyReq {
     enum CmdId {
         option allow_alias = true;
@@ -734,9 +773,10 @@ message DungeonCandidateTeamSetReadyReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    bool is_ready = 15;
+    bool is_ready = 15; // 是否准备
 }
 
+// 地城组队设置准备状态响应 S -> C
 message DungeonCandidateTeamSetReadyRsp {
     enum CmdId {
         option allow_alias = true;
@@ -749,6 +789,7 @@ message DungeonCandidateTeamSetReadyRsp {
     int32 retcode = 12;
 }
 
+// 地城组队替换角色请求 C -> S
 message DungeonCandidateTeamChangeAvatarReq {
     enum CmdId {
         option allow_alias = true;
@@ -762,6 +803,7 @@ message DungeonCandidateTeamChangeAvatarReq {
     repeated uint64 avatar_guid_list = 5;
 }
 
+// 地城组队替换角色响应 S -> C
 message DungeonCandidateTeamChangeAvatarRsp {
     enum CmdId {
         option allow_alias = true;
@@ -781,6 +823,7 @@ message DailyDungeonEntryInfo {
     uint32 recommend_dungeon_id = 4;
 }
 
+// 获取日常地城入口Info
 message GetDailyDungeonEntryInfoReq {
     enum CmdId {
         option allow_alias = true;

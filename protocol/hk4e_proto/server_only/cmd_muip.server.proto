@@ -1,3 +1,5 @@
+// 服务器杂项协议
+
 syntax = "proto3";
 
 package proto;
@@ -7,10 +9,11 @@ import "define.proto";
 option go_package = "./;proto";
 
 enum PlayerMemDataType {
-    MEM_DATA_BASIC = 0;
+    MEM_DATA_BASIC = 0; // 基础数据
     MEM_DATA_H5_ACTIVITY = 1;
 }
 
+// 查询在线玩家数量
 message OnlinePlayerNumReq {
     enum CmdId {
         NONE = 0;
@@ -30,6 +33,7 @@ message OnlinePlayerNumRsp {
     uint32 online_player_num_except_sub_account = 4;
 }
 
+// 仅仅是把玩家当成断线处理，并不会立即下线
 message KickoutPlayerNotify {
     enum CmdId {
         NONE = 0;
@@ -39,6 +43,7 @@ message KickoutPlayerNotify {
     uint32 reason = 1;
 }
 
+// 查询玩家是否在指定的game上
 message CheckOnlinePlayerReq {
     enum CmdId {
         NONE = 0;
@@ -46,7 +51,7 @@ message CheckOnlinePlayerReq {
     }
 
     uint32 gameserver_id = 1;
-    uint32 ns_gameserver_id = 2;
+    uint32 ns_gameserver_id = 2; // nodeserver填充
 }
 
 message CheckOnlinePlayerRsp {
@@ -68,10 +73,11 @@ message CheckOnlinePlayerRsp {
     }
 
     int32 retcode = 1;
-    NodeStatus node_status = 2;
-    GameStatus game_status = 3;
+    NodeStatus node_status = 2; // node中的状态
+    GameStatus game_status = 3; // 指定game上UID的状态
 }
 
+// 查询玩家战斗力
 message PlayerCombatForceReq {
     enum CmdId {
         NONE = 0;
@@ -124,6 +130,7 @@ message CheckGameVersionRsp {
     map<uint32, GameVersionResult> next_res_version_result_map = 7;
 }
 
+// 查询在线玩家数量
 message PlatformPlayerNumReq {
     enum CmdId {
         NONE = 0;
@@ -146,9 +153,9 @@ message PlayerMemBasicData {
     string nickname = 1;
     uint32 level = 2;
     uint32 exp = 3;
-    uint32 scoin = 4;
-    uint32 hcoin = 5;
-    uint32 last_login = 6;
+    uint32 scoin = 4;      // 摩拉
+    uint32 hcoin = 5;      // 原石
+    uint32 last_login = 6; // 上次登入时间
     ProfilePicture profile_picture = 7;
     fixed32 register_time = 8;
     uint32 gender_type = 9;
@@ -173,6 +180,7 @@ message PlayerMemH5ActivityDataResult {
     repeated PlayerMemH5ActivityData h5_activity_data_list = 2;
 }
 
+// 查询玩家内存里面的实时数据
 message QueryPlayerMemDataByMuipReq {
     enum CmdId {
         NONE = 0;
@@ -196,16 +204,18 @@ message QueryPlayerMemDataByMuipRsp {
     }
 }
 
+// 设置免密登入:运营账号 -> 玩家账号
 message BindGmUidNotify {
     enum CmdId {
         NONE = 0;
         CMD_ID = 10297;
     }
 
-    uint32 gm_uid = 1;
-    uint32 player_uid = 2;
+    uint32 gm_uid = 1;     // 运营账号uid
+    uint32 player_uid = 2; // 普通玩家uid
 }
 
+// 取消免密登入设置
 message UnbindGmUidNotify {
     enum CmdId {
         NONE = 0;
@@ -215,6 +225,7 @@ message UnbindGmUidNotify {
     uint32 gm_uid = 1;
 }
 
+// 查询免密登入配置
 message GetBindGmUidReq {
     enum CmdId {
         NONE = 0;

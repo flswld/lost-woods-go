@@ -16,6 +16,16 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
+// QueryPath NavMesh 寻路服务（怪物寻路用）
+//
+// 调用方：客户端 NPC/怪物 AI 想从 A 走到 B 时发请求
+// 处理：
+//  1. 遍历所有 destination 位置（取第一个能算出路径的）
+//  2. NavMeshPathfinding 计算多边形路径
+//  3. 返回 corners 路径关键点列表
+//
+// NavMesh 数据由 Unity 编辑器导出 加载到 worldStatic.navMeshManagerMap
+// 注意：原神官方 3.2 版本的 NavMesh 数据已包含在项目 ./NavMesh 目录
 func (h *Handle) QueryPath(userId uint32, gateAppId string, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.QueryPathReq)
 	logger.Debug("query path req: %v, uid: %v, gateAppId: %v", req, userId, gateAppId)
@@ -38,6 +48,15 @@ func (h *Handle) QueryPath(userId uint32, gateAppId string, payloadMsg pb.Messag
 	h.SendMsg(cmd.QueryPathRsp, userId, gateAppId, rsp)
 }
 
+// ObstacleModifyNotify 动态障碍物增删（**当前直接 return 未启用**）
+//
+// 设计意图：玩家释放某些技能（凝光的屏障/钟离的石化）会动态生成障碍物
+// 应该把这些障碍物加到 NavMesh 中 让怪物 AI 绕过
+//
+// **关闭原因**：行 44 直接 return 跳过 后续代码不可达
+//
+//	可能是因为动态 carving 性能开销大 或与原神官方实现有出入
+//	保留代码备用 未来可能启用
 func (h *Handle) ObstacleModifyNotify(userId uint32, gateAppId string, payloadMsg pb.Message) {
 	ntf := payloadMsg.(*proto.ObstacleModifyNotify)
 	logger.Debug("obstacle modify ntf: %v, uid: %v, gateAppId: %v", ntf, userId, gateAppId)

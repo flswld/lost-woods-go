@@ -19,14 +19,42 @@ import (
 )
 
 // 场景模块 场景组 小组 实体 管理相关
+//
+// 本文件承载玩家进出场景的全流程 包括：
+//  1. 进场景四步状态机 EnterSceneReadyReq → SceneInitFinishReq → EnterSceneDoneReq → PostEnterSceneReq
+//     四步对应 SceneLoadState：SceneNone → SceneInitFinish → SceneEnterDone（PostEnter之后状态不变）
+//  2. 场景内实体的增删/视野同步（AddSceneEntityNotify/RemoveSceneEntityNotify*）
+//  3. Group/Suite 加载与切换（AddSceneGroup/RemoveSceneGroup/AddSceneGroupSuite）
+//  4. 实体战斗属性变更（AddEntityHp/SubEntityHp/KillEntity）
+//  5. 天气区域计算与切换（场景内不同区域有不同气候）
+//  6. SceneEntityInfo 各类型 PB 打包（角色/怪物/NPC/物件等）
+//
+// 关键设计：
+//   - 异步加载：LoadSceneBlockAsync 起 goroutine 读 DB block 存档 完成后通过 LocalEvent 回调主循环
+//     期间玩家可继续移动 不会"冻结" 但场景数据下发延后到加载完成
+//   - 视野过滤：SendToSceneA → 普通世界用 vision 距离 + AI世界用 AOI 格子（双套机制）
+//   - Group/Suite：场景里的小组（怪+宝箱+触发器）+ 状态切换（初始/奖励态/完成态）
 
 const (
-	ENTITY_MAX_BATCH_SEND_NUM = 1000 // 单次同步客户端的最大实体数量
+	ENTITY_MAX_BATCH_SEND_NUM = 1000 // 单次同步客户端的最大实体数量 超出按批拆包发送
 )
 
 /************************************************** 接口请求 **************************************************/
 
-// EnterSceneReadyReq 准备进入场景
+// EnterSceneReadyReq 进场景第1步：玩家准备就绪 服务端卸载旧场景实体 + 异步加载新block存档
+//
+// 主要工作：
+//  1. 多人世界首次进入：广播 PlayerPreEnterMpNotify 给房主
+//  2. 如果是切场景（OldSceneId != 0）：
+//     - 卸载玩家旧位置周围的实体（VISION_MISS）
+//     - 广播玩家角色离开旧场景给周围其他玩家（VISION_REMOVE）
+//     - 单人世界：直接卸载旧位置附近group；多人世界：仅卸载附近无其他玩家的group
+//     - SceneJump 时：从旧场景移除玩家 → 设置新场景id/位置/旋转 → 加入新场景
+//     - 非SceneJump（同场景传送）：仅更新玩家位置 + 角色实体位置
+//     - SceneLoadState = SceneNone
+//     - LoadSceneBlockAsync 异步加载新block存档（不阻塞主循环）
+//     - 异步加载未完成则不发 Rsp，等 OnSceneBlockLoad 回调时补发
+//  3. 同步加载完成或非切场景情况：直接发送 EnterScenePeerNotify + EnterSceneReadyRsp
 func (g *Game) EnterSceneReadyReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.EnterSceneReadyReq)
 
@@ -144,7 +172,23 @@ func (g *Game) EnterSceneReadyReq(player *model.Player, payloadMsg pb.Message) {
 	g.SendMsg(cmd.EnterSceneReadyRsp, player.PlayerId, player.ClientSeq, rsp)
 }
 
-// SceneInitFinishReq 场景初始化完成
+// SceneInitFinishReq 进场景第2步：客户端基础数据就绪 服务端推送世界级基础信息
+//
+// 主要工作：
+//  1. 多人世界首次进入：广播 GuestBeginEnterSceneNotify 给世界内所有玩家
+//  2. 服务器时间同步 ServerTimeNotify
+//  3. SceneJump 时下发一系列世界数据：
+//     - WorldPlayerInfoNotify: 同世界所有玩家的基础信息（昵称/等级/头像）
+//     - WorldDataNotify: 世界等级 + 是否多人模式
+//     - PlayerWorldSceneInfoListNotify: 各场景标签和锁定状态
+//     - SceneForceUnlockNotify: 强制解锁场景标志
+//     - HostPlayerNotify: 房主信息
+//     - SceneTimeNotify + PlayerGameTimeNotify: 场景时间和游戏内时间
+//     - PlayerEnterSceneInfoNotify: 队伍实体id + ability控制块
+//  4. 副本（DungeonId != 0）: GCG酒馆初始化 + DungeonWayPointNotify + DungeonDataNotify
+//  5. 复活进场景：全队角色调用 RevivePlayerAvatar
+//  6. 设置玩家天气区域（按位置查找气候配置）
+//  7. SceneLoadState = SceneInitFinish
 func (g *Game) SceneInitFinishReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.SceneInitFinishReq)
 
@@ -207,15 +251,17 @@ func (g *Game) SceneInitFinishReq(player *model.Player, payloadMsg pb.Message) {
 		g.SendMsg(cmd.WorldDataNotify, player.PlayerId, player.ClientSeq, worldDataNotify)
 
 		playerWorldSceneInfoListNotify := &proto.PlayerWorldSceneInfoListNotify{
-			InfoList: []*proto.PlayerWorldSceneInfo{
-				{SceneId: 1, IsLocked: false, SceneTagIdList: []uint32{}},
-				{SceneId: 3, IsLocked: false, SceneTagIdList: []uint32{}},
-				{SceneId: 4, IsLocked: false, SceneTagIdList: []uint32{}},
-				{SceneId: 5, IsLocked: false, SceneTagIdList: []uint32{}},
-				{SceneId: 6, IsLocked: false, SceneTagIdList: []uint32{}},
-				{SceneId: 7, IsLocked: false, SceneTagIdList: []uint32{}},
-				{SceneId: 9, IsLocked: false, SceneTagIdList: []uint32{}},
-			},
+			InfoList: make([]*proto.PlayerWorldSceneInfo, 0),
+		}
+		for _, sceneData := range gdconf.GetSceneDataMap() {
+			if sceneData.SceneType != constant.SCENE_TYPE_WORLD {
+				continue
+			}
+			playerWorldSceneInfoListNotify.InfoList = append(playerWorldSceneInfoListNotify.InfoList, &proto.PlayerWorldSceneInfo{
+				SceneId:        uint32(sceneData.SceneId),
+				SceneTagIdList: make([]uint32, 0),
+				IsLocked:       false,
+			})
 		}
 		for _, info := range playerWorldSceneInfoListNotify.InfoList {
 			dbWorld := player.GetDbWorld()
@@ -330,7 +376,18 @@ func (g *Game) SceneInitFinishReq(player *model.Player, payloadMsg pb.Message) {
 	player.SceneLoadState = model.SceneInitFinish
 }
 
-// EnterSceneDoneReq 进入场景完成
+// EnterSceneDoneReq 进场景第3步：客户端加载完毕 服务端推送场景实体（核心步骤）
+//
+// 主要工作：
+//  1. visionType 决定：SceneJump → VISION_BORN（出生），其他 → VISION_TRANSPORT（传送）
+//  2. AI世界特殊：把玩家添加到 aiWorldAoi（用于AOI格子视野同步）
+//  3. 给客户端推送自己的角色实体 (BORN)
+//  4. 单人/多人世界：加载附近的group + 加载所有trigger涉及的group（保证任务能触发）
+//  5. 推送视野内所有实体（GetVisionEntity 按距离/AOI过滤）
+//  6. AI世界特殊：推送 AOI 范围内其他玩家的角色实体（PUBG玩法需要看到别人）
+//  7. 发送 SceneAreaWeatherNotify 设置天气
+//  8. 多人世界：房主第一次进场完成 → 通知 WaitPlayer 列表里的玩家进场
+//  9. SceneLoadState = SceneEnterDone（之后才能切角色/打怪/接任务）
 func (g *Game) EnterSceneDoneReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.EnterSceneDoneReq)
 
@@ -435,7 +492,17 @@ func (g *Game) EnterSceneDoneReq(player *model.Player, payloadMsg pb.Message) {
 	}
 }
 
-// PostEnterSceneReq 进入场景后
+// PostEnterSceneReq 进场景第4步：客户端完全进入场景 服务端触发任务条件 + 插件钩子
+//
+// 主要工作：
+//  1. 多人世界首次：广播 GuestPostEnterSceneNotify 给世界内其他玩家
+//  2. world.PlayerEnter() 标记玩家已进场
+//  3. 按场景类型触发任务条件：
+//     - SCENE_TYPE_WORLD: QUEST_FINISH_COND_TYPE_ENTER_MY_WORLD
+//     - SCENE_TYPE_DUNGEON: QUEST_FINISH_COND_TYPE_ENTER_DUNGEON
+//     - SCENE_TYPE_ROOM: QUEST_FINISH_COND_TYPE_ENTER_ROOM
+//  4. 触发 PluginEventIdPostEnterScene 插件事件
+//     PUBG 插件在这一步给玩家注入隐藏小图标的 luac 字节码（详见 game_plugin_pubg.go）
 func (g *Game) PostEnterSceneReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.PostEnterSceneReq)
 
@@ -462,17 +529,17 @@ func (g *Game) PostEnterSceneReq(player *model.Player, payloadMsg pb.Message) {
 	world.PlayerEnter(player.PlayerId)
 
 	sceneDataConfig := gdconf.GetSceneDataById(int32(ctx.NewSceneId))
-	if sceneDataConfig == nil {
+	if sceneDataConfig != nil {
+		switch sceneDataConfig.SceneType {
+		case constant.SCENE_TYPE_WORLD:
+			g.TriggerQuest(player, constant.QUEST_FINISH_COND_TYPE_ENTER_MY_WORLD, "", int32(ctx.NewSceneId))
+		case constant.SCENE_TYPE_DUNGEON:
+			g.TriggerQuest(player, constant.QUEST_FINISH_COND_TYPE_ENTER_DUNGEON, "", int32(ctx.DungeonId), int32(ctx.DungeonPointId))
+		case constant.SCENE_TYPE_ROOM:
+			g.TriggerQuest(player, constant.QUEST_FINISH_COND_TYPE_ENTER_ROOM, "", int32(ctx.NewSceneId))
+		}
+	} else {
 		logger.Error("get scene data config is nil, sceneId: %v, uid: %v", ctx.NewSceneId, player.PlayerId)
-		return
-	}
-	switch sceneDataConfig.SceneType {
-	case constant.SCENE_TYPE_WORLD:
-		g.TriggerQuest(player, constant.QUEST_FINISH_COND_TYPE_ENTER_MY_WORLD, "", int32(ctx.NewSceneId))
-	case constant.SCENE_TYPE_DUNGEON:
-		g.TriggerQuest(player, constant.QUEST_FINISH_COND_TYPE_ENTER_DUNGEON, "", int32(ctx.DungeonId), int32(ctx.DungeonPointId))
-	case constant.SCENE_TYPE_ROOM:
-		g.TriggerQuest(player, constant.QUEST_FINISH_COND_TYPE_ENTER_ROOM, "", int32(ctx.NewSceneId))
 	}
 
 	rsp := &proto.PostEnterSceneRsp{
@@ -557,6 +624,18 @@ type SceneBlockLoadInfoCtx struct {
 }
 
 // LoadSceneBlockAsync 异步加载场景区块存档
+//
+// 设计精妙：起 goroutine 读 DB 期间 玩家可继续移动 不冻结主循环
+//   - SceneBlockAsyncLoad 标志位防重入 加载期间再次跨格子触发的请求会被丢弃
+//   - 加载完成后通过 LOCAL_EVENT_MANAGER 推送 AsyncLoadSceneBlockFinish 事件
+//   - 主循环收到事件后调用 OnSceneBlockLoad 应用结果
+//
+// 触发场景：
+//  1. 跨场景：oldScene != newScene 卸载旧场景所有附近格子 加载新场景附近格子
+//  2. 同场景跨block格子：仅卸载离开的格子 加载新进入的格子
+//  3. 同场景同格子：直接返回 false 无需加载
+//
+// 返回 true 表示已起异步加载（调用方应等回调）；false 表示无需加载或已在加载中
 func (g *Game) LoadSceneBlockAsync(player *model.Player, oldScene *Scene, newScene *Scene, oldPos *model.Vector, newPos *model.Vector, origin string, ctx *SceneBlockLoadInfoCtx) bool {
 	if player.SceneBlockAsyncLoad {
 		return false
@@ -666,6 +745,12 @@ func (g *Game) LoadSceneBlockAsync(player *model.Player, oldScene *Scene, newSce
 	return true
 }
 
+// OnSceneBlockLoad 异步加载完成回调 由主循环 LocalEvent 触发
+// 把加载到的 SceneBlock 写入玩家内存 然后按 Origin 类型走对应后续逻辑：
+//   - SceneBlockAoiPlayerMove: 玩家移动跨格子触发的加载 → 继续走移动处理 + 设置实体位置
+//   - EnterSceneReadyReq: 进场景第1步触发的加载 → 补发 EnterScenePeerNotify + EnterSceneReadyRsp
+//
+// 最后清掉 SceneBlockAsyncLoad 标志位 允许下次再触发加载
 func (g *Game) OnSceneBlockLoad(sceneBlockLoadInfo *SceneBlockLoadInfo) {
 	player := USER_MANAGER.GetOnlineUser(sceneBlockLoadInfo.Uid)
 	if player == nil {
@@ -836,6 +921,9 @@ func (g *Game) AddSceneEntityNotify(player *model.Player, visionType proto.Visio
 	}
 }
 
+// AddEntityHp 给实体增加血量 value=固定值 percent=按最大HP百分比（二选一）
+// 角色实体走 AddPlayerAvatarHp 走玩家档；其他实体直接改fightProp[CUR_HP]
+// 上限不超过 MAX_HP；变更后通过 EntityFightPropUpdateNotifyBroadcast 广播给场景内所有玩家
 func (g *Game) AddEntityHp(player *model.Player, scene *Scene, entityId uint32, value float32, percent float32, reason proto.ChangHpReason) {
 	if value == 0.0 && percent == 0.0 {
 		return
@@ -866,6 +954,9 @@ func (g *Game) AddEntityHp(player *model.Player, scene *Scene, entityId uint32, 
 	})
 }
 
+// SubEntityHp 给实体扣血 value=固定值 percent=按最大HP百分比（二选一）
+// 怪物无敌模式（GM 命令开）直接跳过；血量降到 0 自动调用 KillEntity
+// 怪物根据 HpDropList 配置 在掉血到指定百分比阈值时触发掉落（如打怪掉血到50%/30%/10%各掉一次）
 func (g *Game) SubEntityHp(player *model.Player, scene *Scene, entityId uint32, value float32, percent float32, reason proto.ChangHpReason) {
 	if value == 0.0 && percent == 0.0 {
 		return
@@ -960,6 +1051,13 @@ func (g *Game) EntityFightPropUpdateNotifyBroadcast(scene *Scene, entity IEntity
 }
 
 // KillEntity 杀死实体
+//
+// 处理流程：
+//  1. 设置 LifeState=DEAD + 广播 LifeStateChangeNotify
+//  2. 角色实体特殊处理：仅改 avatar.LifeState 不删实体（待玩家复活）
+//  3. 其他实体：从场景/group中移除 + 广播 SceneEntityDisappearNotify(VISION_DIE)
+//  4. 怪物：触发 monsterDrop 随机掉落 + MonsterDieTriggerCheck Lua trigger
+//  5. 物件：触发 GadgetDieTriggerCheck Lua trigger + 物件的 OnDie Lua 脚本
 func (g *Game) KillEntity(player *model.Player, scene *Scene, entityId uint32, dieType proto.PlayerDieType) {
 	entity := scene.GetEntity(entityId)
 	if entity == nil {
@@ -1078,6 +1176,9 @@ func (g *Game) ChangeGadgetState(player *model.Player, entityId uint32, state ui
 }
 
 // GetVisionEntity 获取某位置视野内的全部实体
+// 视野判定调用 IsInVision：按 entity.GetVisionLevel() 取对应距离上限（XZ平面距离）
+// 角色实体特殊：只有"队伍当前出战角色"算可见 替补的角色实体不发给客户端
+// 武器实体不算（武器附属于角色 由角色实体的子结构带过去）
 func (g *Game) GetVisionEntity(scene *Scene, pos *model.Vector) map[uint32]IEntity {
 	allEntityMap := scene.GetAllEntity()
 	visionEntity := make(map[uint32]IEntity)
@@ -1124,7 +1225,8 @@ func (g *Game) IsInVision(p1 *model.Vector, p2 *model.Vector, visionLevel int) b
 	return true
 }
 
-// GetNeighborGroup 获取某位置附近的场景组
+// GetNeighborGroup 获取某位置附近的场景组（用于动态加载/卸载附近的怪物宝箱等）
+// 用 sceneEntityAoi（按 visionLevel 分多套AOI）查 1 级邻接格子里的所有 group
 func (g *Game) GetNeighborGroup(sceneId uint32, pos *model.Vector) map[uint32]*gdconf.Group {
 	sceneEntityAoi, exist := WORLD_MANAGER.GetSceneEntityAoiMap()[sceneId]
 	if !exist {
@@ -1179,7 +1281,10 @@ func (g *Game) GetNeighborGroup(sceneId uint32, pos *model.Vector) map[uint32]*g
 
 // TODO Group和Suite的初始化和加载卸载逻辑还没完全理清 所以现在这里写得略答辩
 
-// AddSceneGroup 加载场景组
+// AddSceneGroup 加载场景组（创建初始 suite 的所有实体）
+// Group 是场景里的最小组织单元（一组怪+宝箱+触发器），Suite 是 Group 内的不同状态
+// 加载时按 GroupInitConfig.Suite 的 initSuiteId 创建对应 suite 的实体
+// 同步 group 变量（VariableMap，存档持久化的状态值）+ 触发 GroupLoadTriggerCheck Lua trigger
 func (g *Game) AddSceneGroup(player *model.Player, scene *Scene, groupConfig *gdconf.Group) {
 	group := scene.GetGroupById(uint32(groupConfig.Id))
 	if group != nil {
@@ -1225,6 +1330,8 @@ func (g *Game) AddSceneGroup(player *model.Player, scene *Scene, groupConfig *gd
 }
 
 // RemoveSceneGroup 卸载场景组
+// 重要约束：只要 group 上还挂有任何 trigger 就不卸载（保证任务还能触发）
+// 卸载时把 group 内所有 suite 都从场景中移除 + NPC 类 group 发 GroupUnloadNotify 通知客户端
 func (g *Game) RemoveSceneGroup(player *model.Player, scene *Scene, groupConfig *gdconf.Group) {
 	// logger.Debug("remove scene group, groupId: %v, uid: %v", groupConfig.Id, player.PlayerId)
 	for _, triggerData := range gdconf.GetTriggerDataMap() {
@@ -1308,6 +1415,13 @@ func (g *Game) RefreshSceneGroupSuite(player *model.Player, groupId uint32, suit
 	g.AddSceneGroupSuite(player, groupId, suiteId)
 }
 
+// AddSceneGroupSuiteCore 添加 group 的 suite 到场景（核心实现，被 AddSceneGroup 和 AddSceneGroupSuite 调用）
+//
+// 处理：
+//  1. 怪物：按 MonsterConfigIdList 创建实体 跳过已被玩家击杀的（CheckIsKill）
+//  2. 物件：按 GadgetConfigIdList 创建实体 跳过已被玩家击破的
+//  3. NPC：直接全部创建（NPC不会被击杀）
+//  4. 把这些实体注册到 scene.GroupSuite 索引中
 func (g *Game) AddSceneGroupSuiteCore(player *model.Player, scene *Scene, groupId uint32, suiteId uint8) {
 	groupConfig := gdconf.GetSceneGroup(int32(groupId))
 	if groupConfig == nil {
@@ -1371,7 +1485,16 @@ func (g *Game) AddSceneGroupSuiteCore(player *model.Player, scene *Scene, groupI
 	scene.AddGroupSuite(groupId, suiteId, entityMap)
 }
 
-// CreateConfigEntity 创建配置表里的实体
+// CreateConfigEntity 按 Lua 配置创建实体（Monster/Npc/Gadget 三种）
+//
+//   - Monster: 怪物等级 = 配置等级 × (世界等级+1)，上限100；调 scene.CreateEntityMonster
+//   - Npc: 直接创建 NPC 实体
+//   - Gadget: 按 GadgetType 分支
+//     · GATHER_POINT: 采集点（薄荷蘑菇等）→ CreateEntityGadgetGather
+//     · WORKTOP: 操作台（按钮机关）→ CreateEntityGadgetWorktop
+//     · 其他类型: 普通物件 → CreateEntityGadgetNormal
+//
+// 物件状态从存档（sceneGroup）取，保证宝箱开过/机关解过状态不丢
 func (g *Game) CreateConfigEntity(scene *Scene, groupId uint32, entityConfig any) uint32 {
 	world := scene.GetWorld()
 	owner := world.GetOwner()
@@ -1523,7 +1646,8 @@ func (g *Game) SceneGroupCreateEntity(player *model.Player, groupId uint32, conf
 	}
 }
 
-// CreateMonster 创建怪物实体
+// CreateMonster 创建怪物实体（GM 命令 spawn 用）
+// pos=nil 时取玩家位置随机偏移 5m 朝向随机；configId=0 表示非group内的临时怪物
 func (g *Game) CreateMonster(player *model.Player, pos *model.Vector, monsterId uint32, level uint8) uint32 {
 	world := WORLD_MANAGER.GetWorldById(player.WorldId)
 	if world == nil {
@@ -1547,7 +1671,8 @@ func (g *Game) CreateMonster(player *model.Player, pos *model.Vector, monsterId 
 	return monsterEntity.GetId()
 }
 
-// CreateGadget 创建物件实体
+// CreateGadget 创建普通物件实体（GM 命令 spawn 用）
+// pos=nil 时取玩家位置随机偏移 5m 朝向随机；状态默认 GADGET_STATE_DEFAULT
 func (g *Game) CreateGadget(player *model.Player, pos *model.Vector, gadgetId uint32) uint32 {
 	if gadgetId == 0 {
 		logger.Error("create gadget id is zero, pos: %+v, uid: %v", pos, player.PlayerId)

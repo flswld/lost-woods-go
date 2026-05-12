@@ -1,3 +1,5 @@
+// MySQL里面为什么要存储json格式的字符串?
+
 syntax = "proto3";
 
 package proto;
@@ -10,28 +12,28 @@ message Timestamp {
 }
 
 message StopServerConfig {
-    Timestamp begin_time = 1;
-    Timestamp end_time = 2;
-    string url = 3;
-    uint32 text_id = 4;
+    Timestamp begin_time = 1; // 开始时间戳
+    Timestamp end_time = 2;   // 结束时间戳
+    string url = 3;           // 停服提示的网址
+    uint32 text_id = 4;       // 多语言文本
     uint32 content_text_id = 5;
 }
 
 message StopRegisterConfig {
-    Timestamp begin_time = 1;
-    Timestamp end_time = 2;
-    uint32 max_player_num = 3;
+    Timestamp begin_time = 1;  // 停止注册开始时间戳
+    Timestamp end_time = 2;    // 停止注册结束时间戳
+    uint32 max_player_num = 3; // 最大注册量, TODO....尚未实现
 }
 
 message ForceUpdateConfig {
-    string url = 1;
-    uint32 text_id = 2;
+    string url = 1;     // 强更地址
+    uint32 text_id = 2; // 多语言
 }
 
 message DateTimeIntervalConfig {
-    Timestamp begin_time = 1;
-    Timestamp end_time = 2;
-    uint32 text_id = 3;
+    Timestamp begin_time = 1; // 开始时间戳
+    Timestamp end_time = 2;   // 结束时间戳
+    uint32 text_id = 3;       // 多语言
 }
 
 message DataVersionConfig {
@@ -41,12 +43,12 @@ message DataVersionConfig {
         CLIENT_SILENCE = 2;
     }
 
-    uint32 server = 1;
-    uint32 client = 2;
-    uint32 client_silence = 3;
-    map<string, string> client_md5 = 4;
-    map<uint32, string> client_platform_md5 = 5;
-    map<string, string> client_silence_md5 = 6;
+    uint32 server = 1;                           // 服务端使用的数值版本号
+    uint32 client = 2;                           // 寻路使用的数值版本号
+    uint32 client_silence = 3;                   // 静默版本号
+    map<string, string> client_md5 = 4;          // 同一个client版本，不同平台的数值文件不同md5也不同
+    map<uint32, string> client_platform_md5 = 5; // string转换成PlatformType
+    map<string, string> client_silence_md5 = 6;  // 下载静默数值校验md5
     map<uint32, string> client_silence_platform_md5 = 7;
     string client_version_suffix = 8;
     string client_silence_version_suffix = 9;
@@ -55,6 +57,7 @@ message DataVersionConfig {
     bool gcg_forbid_relogin = 12;
 }
 
+// Combo渠道账号校验请求格式
 message SdkAccountReqConfig {
     uint32 app_id = 1;
     uint32 channel_id = 2;
@@ -64,6 +67,7 @@ message SdkAccountReqConfig {
     string region = 6;
 }
 
+// 扭蛋Up配置
 message GachaUpConfig {
     uint32 item_parent_type = 1;
     uint32 prob = 2;
@@ -74,6 +78,7 @@ message DbGachaUpConfig {
     repeated GachaUpConfig gacha_up_list = 1;
 }
 
+// 扭蛋保底规则
 message DbGachaRuleConfig {
     repeated uint32 gacha_rule_list = 1;
 }

@@ -1,3 +1,5 @@
+// 寻路相关协议
+
 syntax = "proto3";
 
 package proto;
@@ -23,8 +25,8 @@ message QueryPathReq {
 
     enum OptionType {
         OPTION_NONE = 0;
-        OPTION_NORMAL = 1;
-        OPTION_FIRST_CAN_GO = 2;
+        OPTION_NORMAL = 1;       // 普通查询, 给一个目标查询从起点到终点
+        OPTION_FIRST_CAN_GO = 2; // 尝试查询一条可行的路, 给多个目标, 依次查询, 直到找到第一个可行结果, 作为返回值
     }
 
     OptionType query_type = 13;
@@ -68,7 +70,7 @@ message ObstacleInfo {
     int32 obstacle_id = 2;
     Vector center = 14;
     ShapeType shape = 6;
-    Vector3Int extents = 12;
+    Vector3Int extents = 12; // OBSTACLE_SHAPE_CAPSULE => (radius, height, radius)
 }
 
 message ObstacleModifyNotify {
@@ -108,10 +110,10 @@ message PathfindingEnterSceneReq {
     }
 
     uint32 scene_id = 12;
-    repeated uint32 activity_id = 14;
+    repeated uint32 activity_id = 14; // 临时方案, 后续要考虑多个活动并存的情况
     uint32 scene_tag_hash = 15;
     uint32 version = 6;
-    bool is_editor = 11;
+    bool is_editor = 11;              // 由gateserver填充
     repeated ObstacleInfo obstacles = 13;
     uint32 polygon_id = 4;
 }
@@ -128,6 +130,7 @@ message PathfindingEnterSceneRsp {
     int32 retcode = 9;
 }
 
+// GMTest
 message GMShowObstacleReq {
     enum CmdId {
         option allow_alias = true;

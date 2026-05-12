@@ -1,5 +1,30 @@
 package format
 
+// NavMesh 数据格式解析器 - 支持 3 种格式的 Unity NavMesh 文件
+//
+// **三种格式的来源/用途**：
+//
+//	1. .gob 格式（LoadFromGobFile）—— 项目自用的紧凑二进制
+//	   - encoding/gob 标准库序列化 体积小加载快
+//	   - 项目内部把 txt/mhy 转换后落盘成 gob 复用（首次启动 → 缓存）
+//
+//	2. .txt 格式（LoadFromTxtFile）—— Unity 编辑器导出的可读文本
+//	   - 正则解析 `\s*([^\s]+) (.*) \((.+)\)` 提取字段
+//	   - 内容是 NavMeshData 各字段的逐行 dump（Unity Yaml 风格）
+//	   - 调试/分析用 体积大加载慢
+//
+//	3. .mhy 格式（LoadFromMhyFile）—— **米哈游内部二进制格式**（3.2 泄漏带出来的）
+//	   - 自定义紧凑布局：用 BufferUnpacker 按字段读 LE int/float
+//	   - 这是官服实际使用的格式 项目能直接读官服 NavMesh 数据
+//	   - 与 Unity NavMesh 数据兼容（米哈游基于 Unity 但做了自定义打包）
+//
+// **NaN 处理**：ReadFloat32 自动把 NaN 转为 0 + log trace（防止脏数据导致 navmesh 异常）
+//   米哈游官服 NavMesh 数据偶有 NaN 字段（可能是地图边界处的退化几何）
+//
+// **类型定义**：本文件还包含 Unity NavMesh 的全套数据结构（AABB / Vector3f / Quaternionf / Matrix4x4f
+//   NavMeshDataHeader / NavMeshTileHeader / Poly / Link / BVNode / OffMeshConnection 等）
+//   命名和字段保持与 Unity 源码一致 便于对比官方源码
+
 import (
 	"bufio"
 	"bytes"
@@ -131,6 +156,8 @@ func (this *AddtionalJosnData) GetObstacle(s string) SceneObsData {
 	return SceneObsData{}
 }
 
+// LoadFromGobFile 从项目自用 gob 格式加载（首选 速度最快）
+// 通常是 txt/mhy 第一次加载后被缓存成 gob 后续启动直接读 gob
 func LoadFromGobFile(file string) (*NavMeshData, error) {
 	f, err := os.Open(file)
 	if err != nil {
@@ -146,6 +173,8 @@ func LoadFromGobFile(file string) (*NavMeshData, error) {
 	}
 }
 
+// LoadFromJsonFile 加载额外的 JSON 数据（如场景障碍物 SceneObsData 等）
+// 与主 NavMesh 数据分离 通常体积小可读
 func LoadFromJsonFile(file string) (*AddtionalJosnData, error) {
 	var data AddtionalJosnData
 	f, err := os.Open(file)
@@ -160,6 +189,19 @@ func LoadFromJsonFile(file string) (*AddtionalJosnData, error) {
 	return &data, nil
 }
 
+// LoadFromTxtFile 从 Unity 编辑器导出的可读文本格式加载
+//
+// 文本格式示例：
+//
+//	Header
+//	  m_PolyCount 1234
+//	  m_VertCount 5678
+//	  m_BVNodeCount (245)
+//	  ...
+//
+// 用正则 `\s*([^\s]+) (.*) \((.+)\)` 提取 (字段名, 值, 类型注解) 三元组
+// 然后反射设置 data 结构体对应字段 类型转换按 reflect.Kind 分支
+// 体积大加载慢 主要用于调试和数据格式分析
 func LoadFromTxtFile(file string) (*NavMeshData, error) {
 	f, err := os.Open(file)
 	if err != nil {
@@ -387,6 +429,18 @@ func readType(reader *bufio.Reader, match1, match2 *regexp.Regexp, v reflect.Val
 	}
 }
 
+// LoadFromMhyFile 从米哈游内部二进制格式加载（3.2 版本泄漏带出来的）
+//
+// 这是官服实际使用的紧凑二进制格式 用 BufferUnpacker（见下文）按 LE int/float
+// 顺序读取字段 通过反射填充 NavMeshData 结构体
+//
+// 格式特点：
+//   - 全 LE 字节序
+//   - 整数变长压缩（不是固定 4 字节）
+//   - 字符串带 4 字节长度前缀
+//   - NaN float 自动转 0 + log trace（米哈游 NavMesh 偶有 NaN 字段）
+//
+// 项目从 3.2 配置数据中读 .mhy 文件能完美还原官服 NavMesh 数据
 func LoadFromMhyFile(file string) (*NavMeshData, error) {
 	f, err := os.Open(file)
 	if err != nil {

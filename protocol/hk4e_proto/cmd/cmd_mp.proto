@@ -1,3 +1,5 @@
+// 联机流程相关协议
+
 syntax = "proto3";
 
 package proto;
@@ -6,6 +8,8 @@ import "define.proto";
 
 option go_package = "./;proto";
 
+// 玩家申请进入联机通知, 会转发给相应玩家
+// S --> C
 message PlayerApplyEnterMpNotify {
     enum CmdId {
         option allow_alias = true;
@@ -17,9 +21,10 @@ message PlayerApplyEnterMpNotify {
 
     uint32 src_thread_index = 5;
     uint32 src_app_id = 6;
-    OnlinePlayerInfo src_player_info = 2;
+    OnlinePlayerInfo src_player_info = 2; // 相关玩家信息，服务器填写
 }
 
+// 玩家客户端发起的联机申请
 message PlayerApplyEnterMpReq {
     enum CmdId {
         option allow_alias = true;
@@ -30,7 +35,7 @@ message PlayerApplyEnterMpReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 target_uid = 4;
+    uint32 target_uid = 4; // 目标UID
 }
 
 message PlayerApplyEnterMpRsp {
@@ -42,11 +47,13 @@ message PlayerApplyEnterMpRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    int32 retcode = 5;
-    uint32 target_uid = 3;
+    int32 retcode = 5;     // 只代表申请协议的返回码，申请结果请看下面的通知
+    uint32 target_uid = 3; // 目标UID
     uint32 param = 4;
 }
 
+// 处理玩家申请的结果通知，也会推给申请玩家
+// S --> C
 message PlayerApplyEnterMpResultNotify {
     enum CmdId {
         option allow_alias = true;
@@ -57,12 +64,12 @@ message PlayerApplyEnterMpResultNotify {
     }
 
     enum Reason {
-        PLAYER_JUDGE = 0;
-        SCENE_CANNOT_ENTER = 1;
-        PLAYER_CANNOT_ENTER_MP = 2;
-        SYSTEM_JUDGE = 3;
-        ALLOW_ENTER_PLAYER_FULL = 4;
-        WORLD_LEVEL_LOWER_THAN_HOST = 5;
+        PLAYER_JUDGE = 0;                // 玩家决定
+        SCENE_CANNOT_ENTER = 1;          // 场景无法进入
+        PLAYER_CANNOT_ENTER_MP = 2;      // 玩家无法进联机
+        SYSTEM_JUDGE = 3;                // 系统判定
+        ALLOW_ENTER_PLAYER_FULL = 4;     // 允许进入的玩家满了
+        WORLD_LEVEL_LOWER_THAN_HOST = 5; // 世界等级比主机低
         HOST_IN_MATCH = 6;
         PLAYER_IN_BLACKLIST = 7;
         PS_PLAYER_NOT_ACCEPT_OTHERS = 8;
@@ -73,12 +80,13 @@ message PlayerApplyEnterMpResultNotify {
         MAX_PLAYER = 13;
     }
 
-    bool is_agreed = 2;
+    bool is_agreed = 2;    // 是否同意
     string target_nickname = 12;
-    Reason reason = 13;
-    uint32 target_uid = 1;
+    Reason reason = 13;    // 理由
+    uint32 target_uid = 1; // 被申请者的UID
 }
 
+// 回复申请通知的请求
 message PlayerApplyEnterMpResultReq {
     enum CmdId {
         option allow_alias = true;
@@ -89,8 +97,8 @@ message PlayerApplyEnterMpResultReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 apply_uid = 2;
-    bool is_agreed = 12;
+    uint32 apply_uid = 2; // 申请者的UID
+    bool is_agreed = 12;  // 是否同意
 }
 
 message PlayerApplyEnterMpResultRsp {
@@ -103,11 +111,12 @@ message PlayerApplyEnterMpResultRsp {
     }
 
     int32 retcode = 1;
-    bool is_agreed = 3;
-    uint32 apply_uid = 10;
+    bool is_agreed = 3;    // 是否同意
+    uint32 apply_uid = 10; // 申请者的UID
     uint32 param = 12;
 }
 
+// 玩家从联机中退出回到单机的通知
 message PlayerQuitFromMpNotify {
     enum CmdId {
         option allow_alias = true;
@@ -118,11 +127,11 @@ message PlayerQuitFromMpNotify {
     }
 
     enum QuitReason {
-        INVALID = 0;
-        HOST_NO_OTHER_PLAYER = 1;
-        KICK_BY_HOST = 2;
-        BACK_TO_MY_WORLD = 3;
-        KICK_BY_HOST_LOGOUT = 4;
+        INVALID = 0;              // 非法无意义
+        HOST_NO_OTHER_PLAYER = 1; // 主机因无其他角色直接退出
+        KICK_BY_HOST = 2;         // 被主机踢了
+        BACK_TO_MY_WORLD = 3;     // 回自己世界
+        KICK_BY_HOST_LOGOUT = 4;  // 主机掉线踢人
         KICK_BY_HOST_BLOCK = 5;
         BE_BLOCKED = 6;
         KICK_BY_HOST_ENTER_HOME = 7;
@@ -131,9 +140,10 @@ message PlayerQuitFromMpNotify {
         KICK_BY_ISLAND_PARTY_GALLERY_START_FAILED = 10;
     }
 
-    QuitReason reason = 11;
+    QuitReason reason = 11; // 退出的理由
 }
 
+// 玩家尝试进入联机通知
 message PlayerPreEnterMpNotify {
     enum CmdId {
         option allow_alias = true;
@@ -144,14 +154,14 @@ message PlayerPreEnterMpNotify {
     }
 
     enum State {
-        INVALID = 0;
-        START = 1;
-        TIMEOUT = 2;
+        INVALID = 0; // 非法
+        START = 1;   // 进入开始
+        TIMEOUT = 2; // 进入超时
     }
 
     State state = 2;
     uint32 uid = 14;
-    string nickname = 6;
+    string nickname = 6; // 昵称
 }
 
 message GetPlayerMpModeAvailabilityReq {
@@ -174,9 +184,9 @@ message GetPlayerMpModeAvailabilityRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    int32 mp_ret = 15;
-    int32 retcode = 2;
-    repeated uint32 param_list = 8;
+    int32 mp_ret = 15;              // MP的返回码，当返回为Succ时可以进入联机
+    int32 retcode = 2;              // req本身的返回码
+    repeated uint32 param_list = 8; // MP失败时会填写的失败原因参数
 }
 
 message PlayerSetOnlyMPWithPSPlayerReq {

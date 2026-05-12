@@ -1,3 +1,5 @@
+// 充值协议
+
 syntax = "proto3";
 
 package proto;
@@ -6,6 +8,7 @@ import "define.proto";
 
 option go_package = "./;proto";
 
+// 客户端点击product后发送RechargeReq给服务端
 message RechargeReq {
     enum CmdId {
         option allow_alias = true;
@@ -22,6 +25,7 @@ message RechargeReq {
     ShopConcertProduct concert_product = 7;
 }
 
+// 客户端接到RechargeRsp才能唤起SDK支付
 message RechargeRsp {
     enum CmdId {
         option allow_alias = true;
@@ -36,6 +40,7 @@ message RechargeRsp {
     string product_id = 2;
 }
 
+// 服务端发货成功通知客户端
 message OrderFinishNotify {
     enum CmdId {
         option allow_alias = true;

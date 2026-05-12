@@ -20,9 +20,25 @@ import (
 	"github.com/flswld/halo/logger"
 )
 
-var APPID string
-var APPVERSION string
+// gate 服务启动入口
+//
+// 启动顺序：
+//  1. 连 Node 服务发现 RPC
+//  2. 向 Node 注册（拿到 AppId 后才能服务）
+//     · GateServerAddr 包含 KCP 地址 + MQ 地址 让其他服可以连过来
+//     · GameVersionList 来自 Hk4e.Version 配置 用于客户端版本筛选
+//  3. 每 15s 发 keepalive（带 LoadCount=当前在线连接数 让 Node 算最小负载 GS）
+//  4. 重新初始化日志（带 AppId 后缀方便集群定位）
+//  5. 启动 MQ（NATS + TCP 直连双通道）
+//  6. 启动 Account DB（OpenId ↔ uid 映射）
+//  7. 启动 ConnManager 进入工作状态
+//  8. 等 SIGTERM/SIGINT 优雅退出（CancelServer 让 Node 移除自己）
 
+var APPID string      // 注册到 Node 后获得的 AppId（每个 gate 实例唯一）
+var APPVERSION string // 编译时注入的版本号（make build VERSION=x.x.x）
+
+// Run gate 主入口（cmd/gate/main.go 调用）
+// ctx 取消时会触发 select 退出 让 defer 清理资源
 func Run(ctx context.Context) error {
 	// natsrpc client
 	discoveryClient, err := rpc.NewDiscoveryClient()

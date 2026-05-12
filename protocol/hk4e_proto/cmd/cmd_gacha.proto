@@ -23,7 +23,7 @@ message GachaUpInfo {
 }
 
 message GachaInfo {
-    uint32 ten_cost_item_id = 2;
+    uint32 ten_cost_item_id = 2;   // 十连消耗物品ID
     uint32 end_time = 14;
     repeated uint32 display_up4_item_list = 1875;
     uint32 cur_schedule_daily_gacha_times = 469;
@@ -36,18 +36,18 @@ message GachaInfo {
     uint32 schedule_id = 10;
     string gacha_prob_url_oversea = 1481;
     uint32 gacha_type = 13;
-    uint32 left_gacha_times = 5;
+    uint32 left_gacha_times = 5;   // 剩余科扭次数
     repeated uint32 display_up5_item_list = 2006;
-    uint32 gacha_times_limit = 11;
+    uint32 gacha_times_limit = 11; // 扭蛋次数上限
     uint32 cost_item_num = 3;
     bool is_new_wish = 733;
     uint32 cost_item_id = 9;
-    uint32 ten_cost_item_num = 6;
+    uint32 ten_cost_item_num = 6;  // 十连消耗物品数量
     string gacha_preview_prefab_path = 4;
     uint32 wish_progress = 1819;
     string title_textmap = 736;
     string gacha_record_url_oversea = 1854;
-    uint32 gacha_sort_id = 7;
+    uint32 gacha_sort_id = 7;      // 排序ID
     string gacha_record_url = 12;
 }
 
@@ -78,24 +78,24 @@ message DoGachaReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 gacha_times = 10;
-    uint32 gacha_schedule_id = 7;
-    uint32 gacha_type = 14;
-    uint32 gacha_random = 13;
-    string gacha_tag = 4;
+    uint32 gacha_times = 10;      // 1或10代表单抽或者10连
+    uint32 gacha_schedule_id = 7; // 扭蛋排期ID,客户端服务器要保持一致
+    uint32 gacha_type = 14;       // 扭蛋类型
+    uint32 gacha_random = 13;     // 扭蛋随机数，防止客户端重复发送协议
+    string gacha_tag = 4;         // 扭蛋tag,客户端忽略,用于模拟扭蛋
 }
 
 message GachaTransferItem {
-    ItemParam item = 3;
-    bool is_transfer_item_new = 1;
+    ItemParam item = 3;            // 转化物品
+    bool is_transfer_item_new = 1; // 是否是新的
 }
 
 message GachaItem {
-    ItemParam gacha_item = 7;
-    bool is_gacha_item_new = 6;
-    bool is_flash_card = 8;
-    repeated ItemParam token_item_list = 9;
-    repeated GachaTransferItem transfer_items = 12;
+    ItemParam gacha_item = 7;                       // 扭到的物品
+    bool is_gacha_item_new = 6;                     // 是否为新的
+    bool is_flash_card = 8;                         // 是否是闪卡
+    repeated ItemParam token_item_list = 9;         // 副产出
+    repeated GachaTransferItem transfer_items = 12; // 转换物品
 }
 
 message DoGachaRsp {
@@ -108,22 +108,22 @@ message DoGachaRsp {
     }
 
     uint32 cur_schedule_daily_gacha_times = 155;
-    uint32 cost_item_num = 10;
+    uint32 cost_item_num = 10;               // 单抽消耗物品数量
     uint32 wish_max_progress = 9;
     uint32 wish_item_id = 8;
     int32 retcode = 13;
-    uint32 ten_cost_item_num = 3;
+    uint32 ten_cost_item_num = 3;            // 十连消耗物品数量
     uint32 wish_progress = 2;
-    repeated GachaItem gacha_item_list = 15;
-    uint32 ten_cost_item_id = 7;
+    repeated GachaItem gacha_item_list = 15; // 主产出
+    uint32 ten_cost_item_id = 7;             // 十连消耗物品ID
     uint32 gacha_times = 4;
     bool is_under_minors_restrict = 1435;
     bool is_under_general_restrict = 1868;
     uint32 gacha_type = 12;
-    uint32 gacha_times_limit = 1;
-    uint32 cost_item_id = 14;
+    uint32 gacha_times_limit = 1;            // 扭蛋次数上限
+    uint32 cost_item_id = 14;                // 单抽消耗物品ID
     uint32 daily_gacha_times = 1240;
-    uint32 left_gacha_times = 6;
+    uint32 left_gacha_times = 6;             // 剩余科扭次数
     uint32 new_gacha_random = 11;
     uint32 gacha_schedule_id = 5;
 }

@@ -19,11 +19,21 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
-// 用于服务器之间传输游戏协议
-// 仅用于传递数据平面(client<--->server)和控制平面(server<--->server)的消息
-// 服务器之间消息优先走tcp socket直连 tcp连接断开或不存在时降级回NATS
-// 请不要用这个来搞RPC写一大堆异步回调!!!
-// 要用RPC有专门的NATSRPC
+// 服务间消息队列 - 数据平面 + 控制平面通信
+//
+// **双通道架构**（详见 CLAUDE.md "TCP 直连优先 NATS 兜底"）：
+//   - TCP 直连：GS/Multi/Robot ↔ Gate 的高频消息（玩家移动/技能/聊天等）
+//     · GS 启动时建立到所有 Gate 的 TCP 长连接 每分钟同步一次 Gate 列表
+//     · 单一长连接 多路复用 减少连接开销 + 极低延迟
+//   - NATS：广播消息 + TCP 不通时的降级路径
+//     · 广播只能走 NATS（topic ALL_SERVER_HK4E）
+//
+// Topic 格式：{serverType}_{appId}_HK4E（详见 topic.go）
+//
+// **不要用这个来做 RPC**！异步回调会让代码很难维护
+//   要 RPC 用专门的 NATSRPC（gs/api/* 中定义的接口）
+//
+// 消息序列化：msgpack（紧凑高效）NetMsg 整体编码后通过 NATS/TCP 传输
 
 type MessageQueue struct {
 	natsConn               *nats.Conn
@@ -38,6 +48,20 @@ type MessageQueue struct {
 	discoveryClient        *rpc.DiscoveryClient
 }
 
+// NewMessageQueue 创建消息队列（每个服务启动时调一次）
+//
+// 启动流程：
+//  1. 连 NATS（必备 失败返回 nil 服务无法启动）
+//  2. 订阅自己的 topic（{serverType}_{appId}_HK4E）
+//  3. 订阅广播 topic（ALL_SERVER_HK4E）
+//  4. 启动 TCP 直连：
+//     · GATE 启动 server（监听其他服连接进来）
+//     · GS/MULTI/ROBOT 启动 client（连到所有 Gate）
+//     · DISPATCH/NODE/GM 不需要 TCP 直连（不走数据平面）
+//  5. 启动 natsMsgRecvHandler / sendHandler 两个 goroutine
+//
+// netMsgInput: 业务代码调 SendToXxx 把消息放进来
+// netMsgOutput: 业务代码调 GetNetMsg() 从这个 chan 读到来的消息
 func NewMessageQueue(serverType string, appId string, discoveryClient *rpc.DiscoveryClient) (r *MessageQueue) {
 	r = new(MessageQueue)
 	conn, err := nats.Connect(config.GetConfig().MQ.NatsUrl)
@@ -91,6 +115,9 @@ func (m *MessageQueue) GetNetMsg() chan *NetMsg {
 	return m.netMsgOutput
 }
 
+// natsMsgRecvHandler NATS 消息接收 goroutine
+// 把 NATS 收到的消息反序列化后塞入 netMsgOutput 让业务代码读
+// 自己发出的广播消息会被收到 这里通过 OriginServerType+AppId 比对自己 跳过
 func (m *MessageQueue) natsMsgRecvHandler() {
 	for {
 		natsMsg := <-m.natsMsgChan
@@ -175,6 +202,18 @@ func (m *MessageQueue) parseNetMsg(rawData []byte) *NetMsg {
 	return netMsg
 }
 
+// sendHandler 消息发送 goroutine（核心调度逻辑 含 TCP 直连 vs NATS 降级）
+//
+// 处理路径：
+//  1. 广播消息（ServerType=ALL_SERVER_HK4E）：必走 NATS
+//  2. 有目标 AppId 的消息：
+//     · 优先查 gateTcpMqInstMap 找 TCP 直连
+//     · TCP 写成功 → 直接走 TCP（高吞吐 低延迟）
+//     · TCP 写失败 → 关闭连接 + fallback 到 NATS
+//     · 没找到 TCP → 直接走 NATS
+//
+// TCP 包格式：4 字节大端长度前缀 + msgpack 数据
+// gateTcpMqEventChan 处理 TCP 连接的建立/断开事件 维护 instMap
 func (m *MessageQueue) sendHandler() {
 	// 网关tcp连接消息收发快速通道 key1:服务器类型 key2:服务器appid value:连接实例
 	gateTcpMqInstMap := map[string]map[string]*GateTcpMqInst{
@@ -269,6 +308,9 @@ type GateTcpMqEvent struct {
 	inst  *GateTcpMqInst
 }
 
+// runGateTcpMqServer GATE 启动 TCP MQ 服务端（监听其他服连接进来）
+// 监听端口 GateTcpMqPort（默认 33333）
+// 接受连接 → 握手（确认对方身份和 appid）→ 注册到 instMap → 启动接收 goroutine
 func (m *MessageQueue) runGateTcpMqServer() {
 	addr, err := net.ResolveTCPAddr("tcp4", "0.0.0.0:"+strconv.Itoa(int(config.GetConfig().Hk4e.GateTcpMqPort)))
 	if err != nil {
@@ -337,6 +379,13 @@ func (m *MessageQueue) gateTcpMqHandshake(conn *net.TCPConn) {
 	}
 }
 
+// runGateTcpMqClient GS/MULTI/ROBOT 启动 TCP MQ 客户端
+//
+// 处理：
+//  1. 每分钟从 Node 拉取所有 Gate 的 MqAddr/MqPort
+//  2. 对每个 Gate 发起 TCP 连接 + 握手
+//  3. 维护一个 gateServerConnAddrMap 防重复连同一 Gate
+//  4. 死连接事件（gateTcpMqDeadEventChan）触发后从 map 中移除 等下次扫描重连
 func (m *MessageQueue) runGateTcpMqClient() {
 	// 已存在的GATE连接列表
 	gateServerConnAddrMap := make(map[string]bool)

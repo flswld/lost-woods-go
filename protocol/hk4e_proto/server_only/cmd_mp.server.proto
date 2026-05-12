@@ -6,6 +6,7 @@ import "define.proto";
 
 option go_package = "./;proto";
 
+// 更新
 message UpdateMpStatusNotify {
     enum CmdId {
         NONE = 0;
@@ -18,6 +19,7 @@ message UpdateMpStatusNotify {
     OnlinePlayerInfo online_player_info = 4;
 }
 
+// 删除
 message DelMpStatusNotify {
     enum CmdId {
         NONE = 0;

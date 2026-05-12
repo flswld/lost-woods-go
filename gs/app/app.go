@@ -1,5 +1,27 @@
 package app
 
+// GS 启动入口 - 游戏服业务核心进程
+//
+// 启动顺序敏感（详见 CLAUDE.md "GS 启动"）：
+//  1. InitLogger（standalone 模式跳过 复用 standalone 全局 logger）
+//  2. InitGameDataConfig         ← gdconf 加载 5-10 秒 必须先于 NewGameCore
+//                                  因为 World/Scene 初始化依赖场景 Lua 数据
+//  3. discoveryClient.RegisterServer(GS) → 获得 8 字符 AppId + 1~MaxGsId 内的 GsId
+//                                  defer CancelServer 优雅退出时通知 Node 立即移除
+//  4. InitLogger 重新（AppName 带 GSID 区分多 GS 实例日志）
+//  5. NewDao                     ← DB（GORM/MongoDB）+ Redis（单机/Cluster）三选一
+//  6. NewMessageQueue            ← NATS + TCP 直连双通道（向所有 Gate 建立 TCP 长连接）
+//  7. NewGameCore                ← 创建 8 个全局管理器 + 启动 gameMainLoop 主循环 goroutine
+//                                  详见 gs/game/game.go NewGameCore
+//  8. NewService                 ← natsrpc Server 暴露 GMService（HTTP 后台 → 这里）
+//  9. 15s 定时 KeepaliveServer（LoadCount = ONLINE_PLAYER_NUM 上报给 Node 做负载均衡）
+//  10. 阻塞等待 SIGTERM/SIGINT/SIGQUIT
+//
+// 关键全局变量 APPID/APPVERSION/GSID（包级）：
+//   - APPVERSION 编译期注入（make build VERSION=x.x.x）
+//   - APPID 由 Node 启动时分配
+//   - GSID 用于 AI 玩家 uid 派生（AiBaseUid + GSID） + GM 后台路由
+
 import (
 	"context"
 	_ "net/http/pprof"
@@ -23,11 +45,27 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-var APPID string
-var APPVERSION string
-var GSID uint32
+var APPID string      // 服务实例 AppId（Node 注册时分配 8 字符随机串）
+var APPVERSION string // 编译期注入（-ldflags "-X main.VERSION=x.x.x"）
+var GSID uint32       // 游戏服编号 1~MaxGsId 注册时分配 影响 AI 玩家 uid + 全服广播路由
 
 func Run(ctx context.Context) error {
+	if !config.GetConfig().Hk4e.StandaloneModeEnable {
+		logger.InitLogger(&logger.Config{
+			AppName:      "gs_start",
+			Level:        logger.ParseLevel(config.GetConfig().Logger.Level),
+			TrackLine:    config.GetConfig().Logger.TrackLine,
+			TrackThread:  config.GetConfig().Logger.TrackThread,
+			EnableFile:   config.GetConfig().Logger.EnableFile,
+			DisableColor: config.GetConfig().Logger.DisableColor,
+			EnableJson:   config.GetConfig().Logger.EnableJson,
+		})
+	}
+	gdconf.InitGameDataConfig()
+	if !config.GetConfig().Hk4e.StandaloneModeEnable {
+		logger.CloseLogger()
+	}
+
 	// natsrpc client
 	discoveryClient, err := rpc.NewDiscoveryClient()
 	if err != nil {
@@ -43,20 +81,6 @@ func Run(ctx context.Context) error {
 		return err
 	}
 	APPID = rsp.GetAppId()
-	go func() {
-		ticker := time.NewTicker(time.Second * 15)
-		for {
-			<-ticker.C
-			_, err := discoveryClient.KeepaliveServer(context.TODO(), &api.KeepaliveServerReq{
-				ServerType: api.GS,
-				AppId:      APPID,
-				LoadCount:  uint32(atomic.LoadInt32(&game.ONLINE_PLAYER_NUM)),
-			})
-			if err != nil {
-				logger.Error("keepalive error: %v", err)
-			}
-		}
-	}()
 	GSID = rsp.GetGsId()
 	defer func() {
 		_, _ = discoveryClient.CancelServer(context.TODO(), &api.CancelServerReq{
@@ -84,8 +108,6 @@ func Run(ctx context.Context) error {
 		logger.Warn("gs exit, appid: %v", APPID)
 	}()
 
-	gdconf.InitGameDataConfig()
-
 	db, err := dao.NewDao()
 	if err != nil {
 		return err
@@ -110,6 +132,28 @@ func Run(ctx context.Context) error {
 		return err
 	}
 	defer s.Close()
+
+	// 15 秒心跳 goroutine 上报当前在线玩家数作为负载指标
+	// Node 据此选最小负载 GS（GetServerAppId）30 秒无心跳被 removeDeadServer 剔除
+	go func() {
+		ticker := time.NewTicker(time.Second * 15)
+		for {
+			select {
+			case <-ctx.Done():
+				ticker.Stop()
+				return
+			case <-ticker.C:
+				_, err := discoveryClient.KeepaliveServer(context.TODO(), &api.KeepaliveServerReq{
+					ServerType: api.GS,
+					AppId:      APPID,
+					LoadCount:  uint32(atomic.LoadInt32(&game.ONLINE_PLAYER_NUM)),
+				})
+				if err != nil {
+					logger.Error("keepalive error: %v", err)
+				}
+			}
+		}
+	}()
 
 	c := make(chan os.Signal, 1)
 	if !config.GetConfig().Hk4e.StandaloneModeEnable {

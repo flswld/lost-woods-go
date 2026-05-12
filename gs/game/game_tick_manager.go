@@ -13,18 +13,40 @@ import (
 )
 
 // 游戏服务器定时帧管理器
+//
+// 双层 tick 体系：
+//   1. 全局 tick (50ms)         驱动 tick 多级派生（100ms / 200ms / 1s / 5s / 10s / 1min / 1h）
+//   2. 玩家 tick (100ms / 玩家)  每个在线玩家独立计时 用于按玩家级别的检查（keepalive 等）
+//
+// 各级派生tick的业务挂载：
+//   - 50ms     音乐播放器（MIDI弹奏给AI世界全场广播）
+//   - 100ms    体力回复计数 + PUBG子弹物理引擎更新
+//   - 200ms    体力消耗
+//   - 1s       多人世界RTT广播 + 场景时间+1 + GAME_TIME_TICK任务条件 + GCG游戏tick
+//   - 5s       多人世界玩家位置广播 + AI世界自动同意敲门
+//   - 10s      场景时间通知 + 玩家时间通知
+//   - 1min     清理LRU lua state + 天气随机
+//   - 1hour    日志（暂无业务）
+//
+// 玩家定时器（CreateUserTimer）允许业务延迟N秒触发某个动作 用于Lua创建怪物、Plugin的延迟回调等
 
 const (
 	ServerTickTime = 50  // 服务器全局tick最小间隔毫秒
 	UserTickTime   = 100 // 玩家自身tick最小间隔毫秒
 )
 
+// UserTimer 玩家级延迟任务
+// timeout 触发时间戳(ms) action 动作类型 data 透传参数
 type UserTimer struct {
 	timeout int64
 	action  int
 	data    []any
 }
 
+// UserTick 玩家个人的tick上下文
+// globalTick      100ms周期触发器
+// globalTickCount 已触发次数 用于派生秒级/分钟级
+// timerMap        延迟任务表 主循环每次玩家tick扫描该表执行到期任务
 type UserTick struct {
 	globalTick      *time.Ticker
 	globalTickCount uint64
@@ -32,6 +54,9 @@ type UserTick struct {
 	timerMap        map[uint64]*UserTimer
 }
 
+// TickManager 全局tick管理器
+// userTickMap 每个玩家的UserTick实例（OnLogin时创建 OnOffline时销毁）
+// tm 上一次tick的wall clock 用于检测分钟/小时/日/月切换
 type TickManager struct {
 	globalTick      *time.Ticker
 	globalTickCount uint64
@@ -55,7 +80,7 @@ func (t *TickManager) GetGlobalTick() *time.Ticker {
 
 // 每个玩家自己的tick
 
-// CreateUserGlobalTick 创建玩家tick对象
+// CreateUserGlobalTick 创建玩家tick对象 OnLogin时调用
 func (t *TickManager) CreateUserGlobalTick(userId uint32) {
 	t.userTickMap[userId] = &UserTick{
 		globalTick:      time.NewTicker(time.Millisecond * UserTickTime),
@@ -65,7 +90,8 @@ func (t *TickManager) CreateUserGlobalTick(userId uint32) {
 	}
 }
 
-// DestroyUserGlobalTick 销毁玩家tick对象
+// DestroyUserGlobalTick 销毁玩家tick对象 OnOffline时调用
+// 必须Stop ticker防止goroutine泄漏
 func (t *TickManager) DestroyUserGlobalTick(userId uint32) {
 	userTick, exist := t.userTickMap[userId]
 	if !exist {
@@ -76,7 +102,9 @@ func (t *TickManager) DestroyUserGlobalTick(userId uint32) {
 	delete(t.userTickMap, userId)
 }
 
-// CreateUserTimer 创建玩家定时任务
+// CreateUserTimer 创建玩家级延迟任务 delay秒后触发指定action
+// 任务在玩家tick扫描时执行（精度100ms）已过期则在下次tick触发
+// data按action类型决定语义 由 userTimerHandle 分支解析
 func (t *TickManager) CreateUserTimer(userId uint32, action int, delay uint32, data ...any) {
 	userTick, exist := t.userTickMap[userId]
 	if !exist {
@@ -97,6 +125,8 @@ func (t *TickManager) CreateUserTimer(userId uint32, action int, delay uint32, d
 func (t *TickManager) onUserTickSecond(userId uint32, now int64) {
 }
 
+// onUserTickMinute 玩家级分钟tick 主要任务：检测60秒未心跳则踢人
+// AI玩家（uid<PlayerBaseUid）跳过 因为不会有心跳
 func (t *TickManager) onUserTickMinute(userId uint32, now int64) {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {
@@ -115,14 +145,17 @@ func (t *TickManager) onUserTickMinute(userId uint32, now int64) {
 }
 
 // 玩家定时任务常量
+// 由 CreateUserTimer 的 action 参数标识 被 userTimerHandle 分发
 
 const (
-	UserTimerActionTest = iota
-	UserTimerActionLuaCreateMonster
-	UserTimerActionLuaGroupTimerEvent
-	UserTimerActionPlugin
+	UserTimerActionTest               = iota // 测试用 仅打印日志
+	UserTimerActionLuaCreateMonster          // Lua脚本调用 ScriptLib.CreateMonster 延迟创建怪物
+	UserTimerActionLuaGroupTimerEvent        // Lua脚本调用 ScriptLib.CreateGroupTimerEvent 延迟触发场景组timer事件
+	UserTimerActionPlugin                    // 插件系统CreateUserTimer延迟回调（PUBG的UserTimerPubgEnd等）
 )
 
+// userTimerHandle 玩家定时任务到期分发
+// 主循环每次玩家tick扫描其timerMap 执行已到期的timer
 func (t *TickManager) userTimerHandle(userId uint32, action int, data []any) {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {
@@ -160,6 +193,10 @@ func (t *TickManager) userTimerHandle(userId uint32, action int, data []any) {
 
 // 服务器全局tick
 
+// OnGameServerTick 全局tick入口 主循环select接到globalTick触发时调用
+// 按 globalTickCount 累计派生多级周期：50ms / 100ms / 200ms / 1s / 5s / 10s / 1min / 1h
+// 所有玩家tick扫描在此一并完成（每玩家100ms精度 取决于select是否轮到它）
+// 末尾用 wall clock 比对检测分钟/小时/日/月切换（onMinuteChange等）
 func (t *TickManager) OnGameServerTick() {
 	t.globalTickCount++
 	tm := time.Now()

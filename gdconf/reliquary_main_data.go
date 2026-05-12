@@ -13,28 +13,26 @@ type ReliquaryMainData struct {
 }
 
 func (g *GameDataConfig) loadReliquaryMainData() {
-	g.ReliquaryMainDataMap = make(map[int32]map[int32]*ReliquaryMainData)
+	g.ReliquaryMainDataDepotMap = make(map[int32]map[int32]*ReliquaryMainData)
+	g.ReliquaryMainDataMap = make(map[int32]*ReliquaryMainData)
 	reliquaryMainDataList := make([]*ReliquaryMainData, 0)
 	readTable[ReliquaryMainData](g.txtPrefix+"ReliquaryMainData.txt", &reliquaryMainDataList)
 	for _, reliquaryMainData := range reliquaryMainDataList {
 		// 通过主属性库ID找到
-		_, ok := g.ReliquaryMainDataMap[reliquaryMainData.MainPropDepotId]
+		_, ok := g.ReliquaryMainDataDepotMap[reliquaryMainData.MainPropDepotId]
 		if !ok {
-			g.ReliquaryMainDataMap[reliquaryMainData.MainPropDepotId] = make(map[int32]*ReliquaryMainData)
+			g.ReliquaryMainDataDepotMap[reliquaryMainData.MainPropDepotId] = make(map[int32]*ReliquaryMainData)
 		}
-		g.ReliquaryMainDataMap[reliquaryMainData.MainPropDepotId][reliquaryMainData.MainPropId] = reliquaryMainData
+		g.ReliquaryMainDataDepotMap[reliquaryMainData.MainPropDepotId][reliquaryMainData.MainPropId] = reliquaryMainData
+		g.ReliquaryMainDataMap[reliquaryMainData.MainPropId] = reliquaryMainData
 	}
-	logger.Info("ReliquaryMainData Count: %v", len(g.ReliquaryMainDataMap))
+	logger.Info("ReliquaryMainData Count: %v", len(g.ReliquaryMainDataDepotMap))
 }
 
-func GetReliquaryMainDataByDepotIdAndPropId(mainPropDepotId int32, mainPropId int32) *ReliquaryMainData {
-	value, exist := CONF.ReliquaryMainDataMap[mainPropDepotId]
-	if !exist {
-		return nil
-	}
-	return value[mainPropId]
+func GetReliquaryMainDataByPropId(mainPropId int32) *ReliquaryMainData {
+	return CONF.ReliquaryMainDataMap[mainPropId]
 }
 
-func GetReliquaryMainDataMap() map[int32]map[int32]*ReliquaryMainData {
-	return CONF.ReliquaryMainDataMap
+func GetReliquaryMainDataMapByDepotId(mainPropDepotId int32) map[int32]*ReliquaryMainData {
+	return CONF.ReliquaryMainDataDepotMap[mainPropDepotId]
 }

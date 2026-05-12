@@ -1,3 +1,5 @@
+// 技能协议
+
 syntax = "proto3";
 
 package proto;
@@ -6,6 +8,7 @@ import "define.proto";
 
 option go_package = "./;proto";
 
+// 角色技能天赋解锁
 message UnlockAvatarTalentReq {
     enum CmdId {
         option allow_alias = true;
@@ -16,8 +19,8 @@ message UnlockAvatarTalentReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 talent_id = 13;
-    uint64 avatar_guid = 3;
+    uint32 talent_id = 13;  // 天赋ID
+    uint64 avatar_guid = 3; // 角色guid
 }
 
 message UnlockAvatarTalentRsp {
@@ -29,11 +32,12 @@ message UnlockAvatarTalentRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 talent_id = 2;
+    uint32 talent_id = 2;    // 天赋ID
     int32 retcode = 3;
-    uint64 avatar_guid = 10;
+    uint64 avatar_guid = 10; // 角色guid
 }
 
+// 角色解锁天赋通知(增加后通知，S->C)
 message AvatarUnlockTalentNotify {
     enum CmdId {
         option allow_alias = true;
@@ -43,12 +47,13 @@ message AvatarUnlockTalentNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 entity_id = 14;
-    uint64 avatar_guid = 13;
-    uint32 talent_id = 10;
-    uint32 skill_depot_id = 1;
+    uint32 entity_id = 14;     // 角色实体ID
+    uint64 avatar_guid = 13;   // 角色guid
+    uint32 talent_id = 10;     // 天赋ID
+    uint32 skill_depot_id = 1; // 技能库ID
 }
 
+// 角色技能库改变通知(S->C)
 message AvatarSkillDepotChangeNotify {
     enum CmdId {
         option allow_alias = true;
@@ -58,16 +63,17 @@ message AvatarSkillDepotChangeNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 skill_depot_id = 15;
-    map<uint32, uint32> proud_skill_extra_level_map = 14;
-    repeated uint32 talent_id_list = 9;
-    repeated uint32 proud_skill_list = 4;
-    uint32 core_proud_skill_level = 2;
-    uint32 entity_id = 7;
-    uint64 avatar_guid = 12;
-    map<uint32, uint32> skill_level_map = 3;
+    uint32 skill_depot_id = 15;                           // 技能库ID
+    map<uint32, uint32> proud_skill_extra_level_map = 14; // 得意技额外等级(key:得意技组ID)
+    repeated uint32 talent_id_list = 9;                   // 已解锁天赋ID列表
+    repeated uint32 proud_skill_list = 4;                 // 已解锁得意技ID列表
+    uint32 core_proud_skill_level = 2;                    // 核心得意技等级
+    uint32 entity_id = 7;                                 // 角色实体ID
+    uint64 avatar_guid = 12;                              // 角色guid
+    map<uint32, uint32> skill_level_map = 3;              // 主动技能等级(skill_id=>level)
 }
 
+// 大天赋点转化
 message BigTalentPointConvertReq {
     enum CmdId {
         option allow_alias = true;
@@ -78,8 +84,8 @@ message BigTalentPointConvertReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    repeated uint64 item_guid_list = 6;
-    uint64 avatar_guid = 3;
+    repeated uint64 item_guid_list = 6; // 转化大天赋点的道具列表
+    uint64 avatar_guid = 3;             // 角色guid
 }
 
 message BigTalentPointConvertRsp {
@@ -92,9 +98,10 @@ message BigTalentPointConvertRsp {
     }
 
     int32 retcode = 1;
-    uint64 avatar_guid = 8;
+    uint64 avatar_guid = 8; // 角色guid
 }
 
+// 角色技能最大累积次数通知(改变后通知，S->C)
 message AvatarSkillMaxChargeCountNotify {
     enum CmdId {
         option allow_alias = true;
@@ -104,11 +111,12 @@ message AvatarSkillMaxChargeCountNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 skill_id = 6;
-    uint32 max_charge_count = 11;
-    uint64 avatar_guid = 7;
+    uint32 skill_id = 6;          // 技能ID
+    uint32 max_charge_count = 11; // 最大累积次数
+    uint64 avatar_guid = 7;       // 角色guid
 }
 
+// 角色技能信息通知(S->C，在后台角色出战时通知)
 message AvatarSkillInfoNotify {
     enum CmdId {
         option allow_alias = true;
@@ -118,10 +126,11 @@ message AvatarSkillInfoNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    map<uint32, AvatarSkillInfo> skill_map = 11;
-    uint64 guid = 4;
+    map<uint32, AvatarSkillInfo> skill_map = 11; // 角色技能信息
+    uint64 guid = 4;                             // 角色唯一ID
 }
 
+// 升级（激活）角色得意技
 message ProudSkillUpgradeReq {
     enum CmdId {
         option allow_alias = true;
@@ -132,9 +141,9 @@ message ProudSkillUpgradeReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint64 avatar_guid = 5;
-    uint32 old_proud_skill_level = 4;
-    uint32 proud_skill_id = 14;
+    uint64 avatar_guid = 5;           // 角色唯一ID
+    uint32 old_proud_skill_level = 4; // 旧的得意技等级
+    uint32 proud_skill_id = 14;       // 得意技（一般只有核心得意技）
 }
 
 message ProudSkillUpgradeRsp {
@@ -146,11 +155,12 @@ message ProudSkillUpgradeRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint64 avatar_guid = 6;
-    uint32 proud_skill_id = 10;
+    uint64 avatar_guid = 6;     // 角色唯一ID
+    uint32 proud_skill_id = 10; // 得意技
     int32 retcode = 15;
 }
 
+// 角色得意技激活通知（得意技升级成功或角色突破时通知）
 message ProudSkillChangeNotify {
     enum CmdId {
         option allow_alias = true;
@@ -160,12 +170,13 @@ message ProudSkillChangeNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint64 avatar_guid = 11;
-    uint32 entity_id = 4;
-    uint32 skill_depot_id = 8;
-    repeated uint32 proud_skill_list = 12;
+    uint64 avatar_guid = 11;               // 角色唯一ID
+    uint32 entity_id = 4;                  // 角色实体ID
+    uint32 skill_depot_id = 8;             // 技能库
+    repeated uint32 proud_skill_list = 12; // 激活了的得意技
 }
 
+// 升级角色主动技能
 message AvatarSkillUpgradeReq {
     enum CmdId {
         option allow_alias = true;
@@ -176,9 +187,9 @@ message AvatarSkillUpgradeReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint64 avatar_guid = 7;
-    uint32 old_level = 3;
-    uint32 avatar_skill_id = 4;
+    uint64 avatar_guid = 7;     // 角色唯一ID
+    uint32 old_level = 3;       // 升级前的角色技能等级
+    uint32 avatar_skill_id = 4; // 主动技能ID
 }
 
 message AvatarSkillUpgradeRsp {
@@ -190,13 +201,14 @@ message AvatarSkillUpgradeRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint64 avatar_guid = 11;
-    uint32 cur_level = 14;
-    uint32 avatar_skill_id = 9;
-    uint32 old_level = 3;
+    uint64 avatar_guid = 11;    // 角色唯一ID
+    uint32 cur_level = 14;      // 升级后的角色技能等级
+    uint32 avatar_skill_id = 9; // 主动技能ID
+    uint32 old_level = 3;       // 升级前的角色技能等级
     int32 retcode = 4;
 }
 
+// 角色主动技能变化通知（主动技能升级时通知）
 message AvatarSkillChangeNotify {
     enum CmdId {
         option allow_alias = true;
@@ -206,14 +218,15 @@ message AvatarSkillChangeNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 cur_level = 11;
-    uint64 avatar_guid = 2;
-    uint32 entity_id = 7;
-    uint32 skill_depot_id = 13;
-    uint32 old_level = 1;
-    uint32 avatar_skill_id = 6;
+    uint32 cur_level = 11;      // 升级后的角色技能等级
+    uint64 avatar_guid = 2;     // 角色唯一ID
+    uint32 entity_id = 7;       // 角色实体ID
+    uint32 skill_depot_id = 13; // 技能库
+    uint32 old_level = 1;       // 升级前的角色技能等级
+    uint32 avatar_skill_id = 6; // 主动技能ID
 }
 
+// 得意技额外等级变化通知
 message ProudSkillExtraLevelNotify {
     enum CmdId {
         option allow_alias = true;
@@ -223,12 +236,13 @@ message ProudSkillExtraLevelNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 talent_type = 11;
-    uint32 talent_index = 8;
-    uint64 avatar_guid = 15;
-    uint32 extra_level = 3;
+    uint32 talent_type = 11; // 技能类型：主动技能/核心得意技/固有得意技
+    uint32 talent_index = 8; // 技能索引
+    uint64 avatar_guid = 15; // 角色唯一ID
+    uint32 extra_level = 3;  // 额外等级
 }
 
+// 是否能使用主动技能的通知，爬塔使用(S->C)
 message CanUseSkillNotify {
     enum CmdId {
         option allow_alias = true;
@@ -238,7 +252,7 @@ message CanUseSkillNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    bool is_can_use_skill = 2;
+    bool is_can_use_skill = 2; // 是否能使用主动技能，默认可以使用
 }
 
 message AvatarTeamResonanceInfo {

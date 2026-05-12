@@ -1,3 +1,5 @@
+// 任务相关协议
+
 syntax = "proto3";
 
 package proto;
@@ -14,11 +16,12 @@ enum ChapterState {
 }
 
 enum BargainResultType {
-    BARGAIN_COMPLETE_SUCC = 0;
-    BARGAIN_SINGLE_FAIL = 1;
-    BARGAIN_COMPLETE_FAIL = 2;
+    BARGAIN_COMPLETE_SUCC = 0; // 完全成功
+    BARGAIN_SINGLE_FAIL = 1;   // 单次失败
+    BARGAIN_COMPLETE_FAIL = 2; // 完全失败
 }
 
+// 玩家的任务通知(S->C)
 message QuestListNotify {
     enum CmdId {
         option allow_alias = true;
@@ -28,9 +31,10 @@ message QuestListNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    repeated Quest quest_list = 1;
+    repeated Quest quest_list = 1; // 任务列表
 }
 
+// 玩家的任务差量同步
 message QuestListUpdateNotify {
     enum CmdId {
         option allow_alias = true;
@@ -40,9 +44,10 @@ message QuestListUpdateNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    repeated Quest quest_list = 6;
+    repeated Quest quest_list = 6; // 任务列表
 }
 
+// 玩家的任务删除通知(S->C)
 message QuestDelNotify {
     enum CmdId {
         option allow_alias = true;
@@ -52,11 +57,11 @@ message QuestDelNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 quest_id = 1;
+    uint32 quest_id = 1; // 任务id
 }
 
 message ChildQuest {
-    uint32 quest_config_id = 8;
+    uint32 quest_config_id = 8; // 任务配置ID, 随机任务时读配置使用
     uint32 state = 4;
     uint32 quest_id = 15;
 }
@@ -81,9 +86,9 @@ message InferencePageInfo {
 }
 
 message ParentQuest {
-    repeated int32 quest_var = 14;
+    repeated int32 quest_var = 14; // quest var 列表
     map<uint32, uint32> time_var_map = 8;
-    uint32 parent_quest_state = 1;
+    uint32 parent_quest_state = 1; // 父任务当前状态
     bool is_finished = 7;
     repeated InferencePageInfo inference_page_list = 15;
     ParentQuestRandomInfo random_info = 12;
@@ -94,6 +99,7 @@ message ParentQuest {
     repeated ChildQuest child_quest_list = 9;
 }
 
+// 已经完成的父任务通知(S->C) 全量同步
 message FinishedParentQuestNotify {
     enum CmdId {
         option allow_alias = true;
@@ -103,9 +109,10 @@ message FinishedParentQuestNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    repeated ParentQuest parent_quest_list = 2;
+    repeated ParentQuest parent_quest_list = 2; // 已完成的父任务ID列表
 }
 
+// 已经完成的父任务通知(S->C) 差量同步
 message FinishedParentQuestUpdateNotify {
     enum CmdId {
         option allow_alias = true;
@@ -115,9 +122,10 @@ message FinishedParentQuestUpdateNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    repeated ParentQuest parent_quest_list = 9;
+    repeated ParentQuest parent_quest_list = 9; // 已完成的父任务ID列表
 }
 
+// 添加任务内容进度请求(C->S)
 message AddQuestContentProgressReq {
     enum CmdId {
         option allow_alias = true;
@@ -128,9 +136,9 @@ message AddQuestContentProgressReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 content_type = 6;
-    uint32 param = 12;
-    uint32 add_progress = 15;
+    uint32 content_type = 6;  // 内容类型(取值范围：QuestContentType)
+    uint32 param = 12;        // 内容参数
+    uint32 add_progress = 15; // 添加的进度
 }
 
 message AddQuestContentProgressRsp {
@@ -143,7 +151,7 @@ message AddQuestContentProgressRsp {
     }
 
     int32 retcode = 13;
-    uint32 content_type = 4;
+    uint32 content_type = 4; // 内容类型(取值范围：QuestContentType)
 }
 
 message GetQuestTalkHistoryReq {
@@ -156,7 +164,7 @@ message GetQuestTalkHistoryReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 parent_quest_id = 6;
+    uint32 parent_quest_id = 6; // 父任务ID
 }
 
 message GetQuestTalkHistoryRsp {
@@ -169,10 +177,11 @@ message GetQuestTalkHistoryRsp {
     }
 
     repeated uint32 talk_id_list = 13;
-    uint32 parent_quest_id = 7;
+    uint32 parent_quest_id = 7; // 父任务ID
     int32 retcode = 15;
 }
 
+// 在地图上创建实体
 message QuestCreateEntityReq {
     enum CmdId {
         option allow_alias = true;
@@ -183,10 +192,10 @@ message QuestCreateEntityReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 parent_quest_id = 9;
-    bool is_rewind = 3;
-    uint32 quest_id = 2;
-    CreateEntityInfo entity = 13;
+    uint32 parent_quest_id = 9;   // 创建该实体的parent_quest_id，和quest_id存在一个即可
+    bool is_rewind = 3;           // 是否因为回滚
+    uint32 quest_id = 2;          // 创建该实体的quest_id
+    CreateEntityInfo entity = 13; // 要创建的实体
 }
 
 message QuestCreateEntityRsp {
@@ -198,14 +207,15 @@ message QuestCreateEntityRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 quest_id = 13;
+    uint32 quest_id = 13;         // 创建该实体的quest_id
     int32 retcode = 8;
-    uint32 entity_id = 7;
-    CreateEntityInfo entity = 11;
-    uint32 parent_quest_id = 1;
-    bool is_rewind = 14;
+    uint32 entity_id = 7;         // 创建的实体ID
+    CreateEntityInfo entity = 11; // 实体信息
+    uint32 parent_quest_id = 1;   // 创建该实体的parent_quest_id，和quest_id存在一个即可
+    bool is_rewind = 14;          // 是否因为回滚
 }
 
+// 在地图上销毁实体
 message QuestDestroyEntityReq {
     enum CmdId {
         option allow_alias = true;
@@ -216,9 +226,9 @@ message QuestDestroyEntityReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 scene_id = 2;
-    uint32 entity_id = 9;
-    uint32 quest_id = 8;
+    uint32 scene_id = 2;  // 场景ID, 为0时表示使用当前场景
+    uint32 entity_id = 9; // 删除的实体ID
+    uint32 quest_id = 8;  // 删除该实体的任务ID(只能销毁同一父任务创建出来的实体)
 }
 
 message QuestDestroyEntityRsp {
@@ -230,12 +240,13 @@ message QuestDestroyEntityRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 quest_id = 14;
+    uint32 quest_id = 14;  // 删除该实体的任务ID
     uint32 scene_id = 9;
-    uint32 entity_id = 12;
+    uint32 entity_id = 12; // 删除的实体ID
     int32 retcode = 1;
 }
 
+// 章节状态通知(S->C)
 message ChapterStateNotify {
     enum CmdId {
         option allow_alias = true;
@@ -246,13 +257,13 @@ message ChapterStateNotify {
     }
 
     message NeedPlayerLevel {
-        bool is_limit = 2;
-        uint32 config_need_player_level = 11;
+        bool is_limit = 2;                    // 是否被等级限制
+        uint32 config_need_player_level = 11; // 限制的冒险等阶
     }
 
     message NeedBeginTime {
-        uint32 config_need_begin_time = 3;
-        bool is_limit = 7;
+        uint32 config_need_begin_time = 3; // 限制的开始时间
+        bool is_limit = 7;                 // 是否被开始时间限制
     }
 
     ChapterState chapter_state = 9;
@@ -261,6 +272,7 @@ message ChapterStateNotify {
     uint32 chapter_id = 2;
 }
 
+// 任务进度通知
 message QuestProgressUpdateNotify {
     enum CmdId {
         option allow_alias = true;
@@ -278,9 +290,10 @@ message QuestProgressUpdateNotify {
 message QuestVarOp {
     uint32 index = 9;
     int32 value = 5;
-    bool is_add = 6;
+    bool is_add = 6; // 修改的方式：add方式 还是set方式
 }
 
+// 在地图上销毁实体
 message QuestUpdateQuestVarReq {
     enum CmdId {
         option allow_alias = true;
@@ -291,9 +304,9 @@ message QuestUpdateQuestVarReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 parent_quest_id = 9;
+    uint32 parent_quest_id = 9; // 父任务id和子任务id 传递一个即可，尽量传递子任务id
     repeated QuestVarOp quest_var_op_list = 4;
-    uint32 quest_id = 11;
+    uint32 quest_id = 11;       // 子任务id
     uint32 parent_quest_var_seq = 1;
 }
 
@@ -312,6 +325,7 @@ message QuestUpdateQuestVarRsp {
     uint32 quest_id = 15;
 }
 
+// 任务进度通知
 message QuestUpdateQuestVarNotify {
     enum CmdId {
         option allow_alias = true;
@@ -336,8 +350,8 @@ message QuestDestroyNpcReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 npc_id = 1;
-    uint32 parent_quest_id = 12;
+    uint32 npc_id = 1;           // NPC ID
+    uint32 parent_quest_id = 12; // 相关的parent_quest_id
 }
 
 message QuestDestroyNpcRsp {
@@ -361,6 +375,7 @@ message BargainSnapshot {
     uint32 bargain_id = 5;
 }
 
+// 讲价开启
 message BargainStartNotify {
     enum CmdId {
         option allow_alias = true;
@@ -374,6 +389,7 @@ message BargainStartNotify {
     BargainSnapshot snapshot = 2;
 }
 
+// 出价
 message BargainOfferPriceReq {
     enum CmdId {
         option allow_alias = true;
@@ -385,7 +401,7 @@ message BargainOfferPriceReq {
     }
 
     uint32 bargain_id = 4;
-    uint32 price = 6;
+    uint32 price = 6; // 出价值
 }
 
 message BargainOfferPriceRsp {
@@ -398,11 +414,12 @@ message BargainOfferPriceRsp {
     }
 
     int32 retcode = 5;
-    uint32 result_param = 13;
-    BargainResultType bargain_result = 14;
-    int32 cur_mood = 6;
+    uint32 result_param = 13;              // 结果参数(用于区分talk)
+    BargainResultType bargain_result = 14; // 讲价结果
+    int32 cur_mood = 6;                    // 当前心情值
 }
 
+// 讲价关闭
 message BargainTerminateNotify {
     enum CmdId {
         option allow_alias = true;

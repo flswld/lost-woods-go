@@ -12,7 +12,39 @@ import (
 	"github.com/flswld/halo/logger"
 )
 
-// GM命令管理器模块
+// GM 命令管理器模块
+//
+// 项目最重要的运维入口（详见 CLAUDE.md "三种 GM 入口"）：
+//   - **主入口**: 玩家私聊"小可爱"AI 发命令（PrivateChatReq → PlayerInputCommand）
+//     · 原神官方客户端没有 GM 输入框 但好友私聊有 → 用 AI 好友绕过此限制
+//   - HTTP 后台：GM 服务（gm/）通过 RPC 调到 GS 的 GMService.Cmd → CallGMCmd
+//   - 客户端 GM Talk：开发版客户端 GmTalkReq 走 SystemFuncGM/DevClientGM 两种格式
+//
+// 命令格式（与原神官方内部 GM 一致 不是 grasscutter 风格）：
+//   - 不带 `/` 前缀 直接发命令文本
+//   - 形如 `命令名 子模式 参数...` 或 `命令名 参数...`
+//   - 例：`item add 1234 5`（加道具）、`goto 100 200 300`（传送）、`monster 21010101 5 90`（刷怪）
+//   - 完整命令清单见 game_command_controller.go InitController 注册的 25 个 controller
+//
+// 命令解析流程：
+//  1. 玩家输入 "item add 1234 5" → CommandManager.PlayerInputCommand 入队
+//  2. 主循环 select 收到 CommandMessage → HandleCommand
+//  3. 按命令名（item）查找 CommandController → 校验 CmdPerm（部分命令需要 GM 权限）
+//  4. 解析参数 → 调用 CommandFunc 执行
+//  5. 通过 SendPrivateChat 把执行结果回复给玩家（"小可爱"发的私聊）
+//
+// 命令分两类：
+//   - 玩家命令（CommandPermNormal）：所有玩家都能用 如 /help
+//   - GM 命令（CommandPermGM）：需要权限 玩家档 CmdPerm >= GM 才能用 大部分命令是这种
+//
+// 流式参数解析：
+//   - Must("string", func(p)...): 必填参数（缺失则失败）
+//   - Option("int", func(p)...): 可选参数
+//   - Array("uint32", func(p)...): 数组参数（剩余所有参数都按此类型解析）
+//   - Execute(thenFunc): 解析完成后调用主逻辑
+//
+// 颜色消息：通过 <color=#XXXXXX>text</color> 标签 客户端聊天面板会渲染颜色
+//   绿色=成功 红色=失败 黄色=帮助标题 等
 
 // CommandPerm 命令权限等级
 // 0 为普通玩家 数越大权限越大
@@ -27,9 +59,9 @@ const (
 type CommandFunc func(content *CommandContent) bool
 
 const (
-	PlayerChatGM = iota // 玩家聊天GM
-	SystemFuncGM        // 系统函数GM
-	DevClientGM         // 开发客户端GM
+	PlayerChatGM = iota // 玩家聊天 GM（主入口 私聊"小可爱" "item add 1234 5" 不带 / 前缀）
+	SystemFuncGM        // 系统函数 GM（开发版客户端用 "@@FuncName(p1,p2,...)" 格式）
+	DevClientGM         // 开发客户端 GM（开发版 GmTalk 输入框 普通文本走聊天命令）
 )
 
 // CommandMessage 命令消息
@@ -51,22 +83,23 @@ type GMCmdResult struct {
 }
 
 // CommandContentStepFunc 命令步骤处理函数
-type CommandContentStepFunc func(param any) bool
+type CommandContentStepFunc func(p any) bool
 
-// CommandContentStepType 命令步骤类型
-type CommandContentStepType uint8
+// CommandContentParamType 命令参数类型
+type CommandContentParamType uint8
 
 const (
-	CommandContentStepTypeNone    = CommandContentStepType(iota)
-	CommandContentStepTypeDynamic // 动态
-	CommandContentStepTypeOption  // 可选
+	CommandContentParamTypeNone   = CommandContentParamType(iota)
+	CommandContentParamTypeMust   // 必填
+	CommandContentParamTypeOption // 可选
+	CommandContentParamTypeArray  // 数组
 )
 
 // CommandContentStep 命令步骤结构
 type CommandContentStep struct {
-	StepType     CommandContentStepType // 步骤类型
-	ParamTypeStr string                 // 当前步骤参数类型
-	StepFunc     CommandContentStepFunc // 步骤处理函数
+	ParamType      CommandContentParamType // 参数类型
+	ParamValueType string                  // 参数数值类型
+	StepFunc       CommandContentStepFunc  // 处理函数
 }
 
 // CommandContent 命令内容
@@ -199,12 +232,12 @@ func (c *CommandContent) getNextParam(typeStr string) (param any, ok bool) {
 	}
 }
 
-// Dynamic 动态参数执行
-func (c *CommandContent) Dynamic(typeStr string, stepFunc CommandContentStepFunc) *CommandContent {
+// Must 必填参数执行
+func (c *CommandContent) Must(typeStr string, stepFunc CommandContentStepFunc) *CommandContent {
 	step := &CommandContentStep{
-		StepType:     CommandContentStepTypeDynamic,
-		ParamTypeStr: typeStr,
-		StepFunc:     stepFunc,
+		ParamType:      CommandContentParamTypeMust,
+		ParamValueType: typeStr,
+		StepFunc:       stepFunc,
 	}
 	c.stepList = append(c.stepList, step)
 	return c
@@ -213,42 +246,77 @@ func (c *CommandContent) Dynamic(typeStr string, stepFunc CommandContentStepFunc
 // Option 可选参数执行
 func (c *CommandContent) Option(typeStr string, stepFunc CommandContentStepFunc) *CommandContent {
 	step := &CommandContentStep{
-		StepType:     CommandContentStepTypeOption,
-		ParamTypeStr: typeStr,
-		StepFunc:     stepFunc,
+		ParamType:      CommandContentParamTypeOption,
+		ParamValueType: typeStr,
+		StepFunc:       stepFunc,
 	}
 	c.stepList = append(c.stepList, step)
 	return c
 }
 
-// Execute 执行命令实际业务并返回结果
+func (c *CommandContent) Array(typeStr string, stepFunc CommandContentStepFunc) *CommandContent {
+	step := &CommandContentStep{
+		ParamType:      CommandContentParamTypeArray,
+		ParamValueType: typeStr,
+		StepFunc:       stepFunc,
+	}
+	c.stepList = append(c.stepList, step)
+	return c
+}
+
+// Execute 解析参数并执行命令业务（流式 API 的终点）
+//
+// 参数解析规则：
+//   - Must: 必须按顺序提供 数量不足时返回 false
+//   - Option: 在 Must 之后 数量不够则跳过
+//   - Array: 必须放最后（吃掉剩余所有参数）
+//
+// 任意 stepFunc 返回 false → 整体执行失败
+// 全部 stepFunc 通过后调用 thenFunc 执行业务
 func (c *CommandContent) Execute(thenFunc func() bool) bool {
 	// 获取必填参数的数量
-	dynamicStepCount := 0
+	mustParamExecCount := 0
 	for _, step := range c.stepList {
-		if step.StepType == CommandContentStepTypeDynamic {
-			dynamicStepCount++
+		if step.ParamType == CommandContentParamTypeMust {
+			mustParamExecCount++
 		}
 	}
 	// 计算可选参数可执行的数量
-	optionExecCount := len(c.ParamList) - dynamicStepCount
+	optionParamExecCount := len(c.ParamList) - mustParamExecCount
 	// 可选参数可执行的数量为负数代表肯定有个必填参数缺少
-	if optionExecCount < 0 {
+	if optionParamExecCount < 0 {
 		return false
 	}
 	// 执行每个步骤
-	for _, step := range c.stepList {
+	for index, step := range c.stepList {
+		if step.ParamType == CommandContentParamTypeArray {
+			if index != len(c.stepList)-1 {
+				continue
+			}
+			paramList := make([]any, 0)
+			for {
+				param, ok := c.getNextParam(step.ParamValueType)
+				if !ok {
+					break
+				}
+				paramList = append(paramList, param)
+			}
+			if !step.StepFunc(paramList) {
+				return false
+			}
+			break
+		}
 		// 确保为可选参数 参数不足则不执行
-		if step.StepType == CommandContentStepTypeOption {
+		if step.ParamType == CommandContentParamTypeOption {
 			// 参数数量不足时跳过可选参数
-			if optionExecCount <= 0 {
+			if optionParamExecCount == 0 {
 				continue
 			}
 			// 没有跳过代表后面会执行本次可选参数
-			optionExecCount--
+			optionParamExecCount--
 		}
 		// 获取当前参数
-		param, ok := c.getNextParam(step.ParamTypeStr)
+		param, ok := c.getNextParam(step.ParamValueType)
 		if !ok {
 			return false
 		}
@@ -354,7 +422,14 @@ func (c *CommandManager) DelController(controller *CommandController) {
 	}
 }
 
-// PlayerInputCommand 玩家输入要处理的命令
+// PlayerInputCommand 玩家私聊输入命令的入口（PrivateChatReq 调用）
+//
+// 关键约束：
+//   - 仅识别私聊"小可爱"AI 的消息（targetUid == system.PlayerId）
+//   - AI 世界中禁用（PUBG 玩法时不能用 GM 命令 防止破坏游戏平衡）
+//
+// 通过 commandMessageInput 通道把命令丢给主循环 select 处理（异步化）
+// 主循环收到后调 HandleCommand → ExecCommand 实际执行
 func (c *CommandManager) PlayerInputCommand(player *model.Player, targetUid uint32, text string) {
 	// 机器人不会读命令所以写到了 PrivateChatReq
 
@@ -376,7 +451,20 @@ func (c *CommandManager) PlayerInputCommand(player *model.Player, targetUid uint
 	}
 }
 
-// CallGMCmd 调用GM命令
+// CallGMCmd 反射调用 GMCmd 类型上的方法（系统函数 GM 入口 + HTTP 后台 GM 入口）
+//
+// 调用方：
+//   - GMService.Cmd RPC（gm/ HTTP 后台）传入 FuncName + 字符串参数列表
+//   - GmTalkReq "@@FuncName(p1,p2,...)" 格式
+//
+// 处理：
+//  1. 反射查找 c.gmCmd 上的方法
+//  2. 校验参数数量
+//  3. 按方法签名的参数类型字符串转换（int/uint8/float64/bool/string 等）
+//  4. 调用方法 把返回值序列化为 JSON 字符串返回
+//
+// GMCmd 是另一组 GM 命令实现（详见 game_command_gm.go）数十个 GMXxx 方法
+// 这套机制让运维可以通过 HTTP 后台远程操控游戏服 不需要进客户端
 func (c *CommandManager) CallGMCmd(funcName string, paramList []string) (bool, string) {
 	fn := c.gmCmdRefValue.MethodByName(funcName)
 	if !fn.IsValid() {
@@ -512,7 +600,15 @@ func (c *CommandManager) HandleCommand(command *CommandMessage) {
 	}
 }
 
-// ExecCommand 执行命令
+// ExecCommand 实际执行玩家聊天 GM 命令（PlayerChatGM/DevClientGM 共用）
+//
+// 处理：
+//  1. 按空格分割命令文本（如"give 1234 5"→ ["give", "1234", "5"]）
+//  2. 命令名转小写 查找 controllerMap
+//  3. 校验玩家权限（CmdPerm < controller.Perm 时拒绝）
+//  4. 处理 CommandAssignUid（"@uid xxx" 让 GM 给指定玩家执行命令）
+//  5. 调用 controller.Func(content)
+//  6. 失败时打印 controller.UsageList 帮助提示（{alias} 替换为实际命令名）
 func (c *CommandManager) ExecCommand(cmd *CommandMessage) {
 	// 命令内容
 	content := new(CommandContent)

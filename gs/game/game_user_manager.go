@@ -18,20 +18,37 @@ import (
 )
 
 // 玩家管理器
-
-// 玩家登录 从db查询出来然后写入redis并异步回调返回玩家对象
-// 玩家离线 写入db和redis
-// 玩家定时保存 写入db和redis
+//
+// 三层存储模型：
+//   1. 内存（playerMap）              —— 在线玩家直接在此操作 单线程无锁
+//   2. Redis（30天过期 msgpack+lz4压缩）—— 跨GS共享 临时离线档加载来源
+//   3. DB（GORM/MongoDB/SQLite三选一）—— 永久持久化
+//
+// 玩家档案的IO都在goroutine异步执行 完成后通过 LOCAL_EVENT_MANAGER 回调主循环
+// 玩家在线状态：
+//   - 本地在线：playerMap中且Online=true
+//   - 远程在线：remotePlayerMap中（玩家在其他GS）
+//   - 全离线：两个map都没有
+//
+// 三个核心goroutine（NewUserManager中启动）：
+//   - saveUserHandle      每分钟一次定时存档（投递RunUserCopyAndSave事件）+ 接收saveUserChan写库
+//   - autoSyncRemotePlayerMap 每60秒同步全服在线表
+//   - asyncWriteDbHandle 通用异步DB写入队列（聊天记录等场景）
 
 type UserManager struct {
 	db                  *dao.Dao                  // db对象
-	playerMap           map[uint32]*model.Player  // 内存玩家数据
-	saveUserChan        chan *SaveUserData        // 用于主协程发送玩家数据给定时保存协程
+	playerMap           map[uint32]*model.Player  // 内存玩家数据 key:uid 主循环单线程访问无需加锁
+	saveUserChan        chan *SaveUserData        // 主循环→定时保存协程的玩家数据通道（缓冲100）
 	remotePlayerMap     map[uint32]string         // 远程玩家 key:userId value:玩家所在gs的appid
-	remotePlayerMapLock sync.RWMutex              // 远程玩家读写锁
-	asyncWriteDbChan    chan func(u *UserManager) // 异步写入db队列
+	remotePlayerMapLock sync.RWMutex              // remotePlayerMap读写锁（跨goroutine同步）
+	asyncWriteDbChan    chan func(u *UserManager) // 通用异步DB写入队列（缓冲100）handler可投递任意闭包到这里执行
 }
 
+// NewUserManager 创建管理器并启动3个goroutine
+// saveUserHandle: 定时保存+接收存档队列
+// syncRemotePlayerMap: 启动时同步一次远程在线表
+// autoSyncRemotePlayerMap: 60秒一次定时同步
+// asyncWriteDbHandle: 异步DB写入队列消费
 func NewUserManager(db *dao.Dao) (r *UserManager) {
 	r = new(UserManager)
 	r.db = db
@@ -106,7 +123,12 @@ type PlayerLoginInfo struct {
 	Ok        bool
 }
 
-// UserLoginLoad 玩家登录数据库异步加载
+// UserLoginLoad 玩家登录入口 异步加载玩家档
+// 由 PlayerLoginReq handler 调用 起独立goroutine执行所有阻塞IO 完成后通过 LocalEvent 回调主循环
+// 流程：分布式锁(redis SetNX) → DB加载 → Redis写入 → 加载聊天记录 → 同步加载附近场景block
+//  1. 集群模式才加分布式锁 防止跨GS并发登录同一uid
+//  2. 加载场景block用同步方式（LoadSceneBlockSync）因为登录时玩家还未在内存 不会卡主循环
+//  3. 任何步骤失败都会发 Ok=false 的 UserLoginLoadFromDbFinish 事件回主循环
 func (u *UserManager) UserLoginLoad(userId uint32, clientSeq uint32, gateAppId string, req *proto.PlayerLoginReq) {
 	_, exist := u.playerMap[userId]
 	// 正常登录
@@ -116,7 +138,7 @@ func (u *UserManager) UserLoginLoad(userId uint32, clientSeq uint32, gateAppId s
 	}
 	go func() {
 		if !config.GetConfig().Hk4e.StandaloneModeEnable {
-			// 加离线玩家数据分布式锁
+			// 加离线玩家数据分布式锁（10秒TTL 50ms重试 共2次）
 			ok := u.db.DistLockSync(userId)
 			if !ok {
 				logger.Error("lock redis offline player data error, uid: %v", userId)
@@ -177,7 +199,9 @@ func (u *UserManager) UserLoginLoad(userId uint32, clientSeq uint32, gateAppId s
 	}()
 }
 
-// OnlineUser 玩家上线
+// OnlineUser 玩家上线 加入playerMap并广播全服在线状态变更
+// 由 OnLogin 在DB加载完成后调用 同时原子递增 ONLINE_PLAYER_NUM（用于Keepalive上报负载）
+// ServerUserOnlineStateChangeNotify 让其他GS的remotePlayerMap更新
 func (u *UserManager) OnlineUser(player *model.Player) {
 	player.Online = true
 	player.OnlineTime = uint32(time.Now().Unix())
@@ -193,6 +217,9 @@ func (u *UserManager) OnlineUser(player *model.Player) {
 	atomic.AddInt32(&ONLINE_PLAYER_NUM, 1)
 }
 
+// ChangeGsInfo 跨服切换信息 从旧GS下线时附带
+// IsChangeGs=true表示玩家要迁移到另一个GS（如跨服多人）非真正下线 走"类重登"流程
+// JoinHostUserId 指定要加入的房主uid 用于查 remotePlayerMap 找到目标GS的appid
 type ChangeGsInfo struct {
 	IsChangeGs     bool
 	JoinHostUserId uint32
@@ -203,7 +230,15 @@ type PlayerOfflineInfo struct {
 	ChangeGsInfo *ChangeGsInfo
 }
 
-// UserOfflineSave 玩家离线数据库保存
+// UserOfflineSave 玩家离线流程的"保存阶段"
+// 异步msgpack序列化玩家档+场景block 后台goroutine写DB+Redis 完成后通过LocalEvent推UserOfflineSaveToDbFinish
+// 特殊标志位：
+//   - NotSave        跳过保存（GM测试用）直接发完成事件
+//   - OfflineClear   清档（重新CreatePlayer 保留DbState）+ 删除聊天记录
+//
+// 注意：序列化在主循环中同步执行（msgpack.Marshal），不能太久 否则卡死整个GS
+//
+//	玩家档大小一般几十KB 序列化耗时<10ms 可接受
 func (u *UserManager) UserOfflineSave(player *model.Player, changeGsInfo *ChangeGsInfo) {
 	player.Online = false
 	player.OfflineTime = uint32(time.Now().Unix())
@@ -279,7 +314,9 @@ func (u *UserManager) UserOfflineSave(player *model.Player, changeGsInfo *Change
 	}()
 }
 
-// OfflineUser 玩家离线
+// OfflineUser 玩家离线流程的"清理阶段"
+// 由 LocalEvent UserOfflineSaveToDbFinish 触发（异步保存完成后）
+// 真正从playerMap移除玩家 广播离线状态 跨服切换时通知Gate把KCP连接路由到新GS
 func (u *UserManager) OfflineUser(player *model.Player, changeGsInfo *ChangeGsInfo) {
 	u.DeleteUser(player.PlayerId)
 	GAME.messageQueue.SendToAll(&mq.NetMsg{
@@ -292,6 +329,9 @@ func (u *UserManager) OfflineUser(player *model.Player, changeGsInfo *ChangeGsIn
 	})
 	atomic.AddInt32(&ONLINE_PLAYER_NUM, -1)
 	if changeGsInfo.IsChangeGs {
+		// 跨服无感切换：通知Gate把玩家KCP连接路由到新GS appid
+		// Gate 收到 ServerUserGsChangeNotify 后 自己代发 PlayerLoginReq 到新GS（gate/net/session.go:260）
+		// 客户端**完全无感** KCP不断 也不收 ClientReconnectNotify（与 ReLoginPlayer 流程不同）
 		gsAppId := u.GetRemoteUserGsAppId(changeGsInfo.JoinHostUserId)
 		GAME.messageQueue.SendToGate(player.GateAppId, &mq.NetMsg{
 			MsgType: mq.MsgTypeServer,
@@ -307,7 +347,15 @@ func (u *UserManager) OfflineUser(player *model.Player, changeGsInfo *ChangeGsIn
 	}
 }
 
-// ChangeUserDbState 玩家存档状态机 主要用于玩家定时保存时进行分类处理
+// ChangeUserDbState 玩家存档状态机 严格控制状态转换
+// 状态转换图：
+//
+//	DbNone   → Insert/Delete/Normal（新玩家初始化时）
+//	DbInsert → 任何状态（不允许 必须先insert到DB才能转换）
+//	DbDelete → DbNormal（撤销删除时）
+//	DbNormal → DbDelete（删除玩家时）
+//
+// UserCopyAndSave 按当前DbState决定走 Insert/Update/Delete DB操作
 func (u *UserManager) ChangeUserDbState(player *model.Player, state int) {
 	if player == nil {
 		return
@@ -342,7 +390,14 @@ func (u *UserManager) ChangeUserDbState(player *model.Player, state int) {
 }
 
 // 远程玩家相关操作
+//
+// remotePlayerMap 维护"在其他GS上在线"的玩家uid → 所在GS appid 的映射
+// 用于跨服多人/聊天/添加好友/GM 等需要联络其他GS玩家的场景
+// 数据来源：
+//   1. 启动时和每60秒一次：从Node拉全局在线表（GetGlobalGsOnlineMap）
+//   2. 实时事件：其他GS广播 ServerUserOnlineStateChangeNotify 时增量更新
 
+// autoSyncRemotePlayerMap 启动定时同步远程在线表的goroutine 60秒一次
 func (u *UserManager) autoSyncRemotePlayerMap() {
 	go func() {
 		ticker := time.NewTicker(time.Second * 60)
@@ -353,6 +408,9 @@ func (u *UserManager) autoSyncRemotePlayerMap() {
 	}()
 }
 
+// syncRemotePlayerMap 从Node拉取全局在线表 整体替换remotePlayerMap
+// 本地在线的玩家不放进remotePlayerMap（避免同一uid同时本地+远程在线导致路由错误）
+// 操作在主循环外的goroutine中执行 用remotePlayerMapLock保护写入
 func (u *UserManager) syncRemotePlayerMap() {
 	rsp, err := GAME.discoveryClient.GetGlobalGsOnlineMap(context.TODO(), nil)
 	if err != nil {
@@ -374,6 +432,7 @@ func (u *UserManager) syncRemotePlayerMap() {
 	logger.Info("sync remote player map finish, len: %v", copyMapLen)
 }
 
+// GetRemoteUserOnlineState 查询玩家是否在远程GS在线
 func (u *UserManager) GetRemoteUserOnlineState(userId uint32) bool {
 	u.remotePlayerMapLock.RLock()
 	_, exist := u.remotePlayerMap[userId]
@@ -385,6 +444,7 @@ func (u *UserManager) GetRemoteUserOnlineState(userId uint32) bool {
 	}
 }
 
+// GetRemoteUserGsAppId 查询玩家所在的GS appid（远程在线时） 不在线返回空串
 func (u *UserManager) GetRemoteUserGsAppId(userId uint32) string {
 	u.remotePlayerMapLock.RLock()
 	appId, exist := u.remotePlayerMap[userId]
@@ -396,6 +456,9 @@ func (u *UserManager) GetRemoteUserGsAppId(userId uint32) string {
 	}
 }
 
+// SetRemoteUserOnlineState 实时事件驱动的远程在线状态更新
+// 由 ROUTE_MANAGER 在收到 ServerUserOnlineStateChangeNotify 时调用
+// 玩家从远程下线时同时清理本地 playerMap（防止跨服迁移残留状态）
 func (u *UserManager) SetRemoteUserOnlineState(userId uint32, isOnline bool, appId string) {
 	u.remotePlayerMapLock.Lock()
 	if isOnline {
@@ -407,6 +470,9 @@ func (u *UserManager) SetRemoteUserOnlineState(userId uint32, isOnline bool, app
 	u.remotePlayerMapLock.Unlock()
 }
 
+// GetAllRemoteAiUidList 获取所有远程在线的AI玩家uid列表
+// AI玩家uid范围 [AiBaseUid, AiBaseUid+1000) 实际就是其他GS的"小可爱"
+// 用于广播聊天等需要给所有AI同步消息的场景
 func (u *UserManager) GetAllRemoteAiUidList() []uint32 {
 	userIdList := make([]uint32, 0)
 	u.remotePlayerMapLock.RLock()
@@ -451,8 +517,10 @@ func (u *UserManager) GetRemoteOnlineUserList(total int) map[uint32]*model.Playe
 	return onlinePlayerMap
 }
 
-// LoadGlobalPlayer 加载并返回一个全服玩家及其在线状态 玩家数据只读禁止修改
-// 参见LoadTempOfflineUser说明
+// LoadGlobalPlayer 一站式获取全服玩家信息（不论本地/远程/离线）
+// 三态返回：本地在线（取自playerMap）/ 远程在线（加载临时离线档）/ 全离线（加载临时离线档）
+// 远程在线情况为简化实现统一走临时离线档加载 数据有滞后但够用
+// 调用方只读使用 不要修改返回的player对象（远程/离线情况下修改不会持久化）
 func (u *UserManager) LoadGlobalPlayer(userId uint32) (player *model.Player, online bool, remote bool) {
 	online = u.GetUserOnlineState(userId)
 	remote = false
@@ -479,9 +547,18 @@ func (u *UserManager) LoadGlobalPlayer(userId uint32) (player *model.Player, onl
 }
 
 // 离线玩家相关操作
+//
+// 用于跨服添加好友、跨服多人申请、查询离线玩家档等需要临时操作离线档的场景
+// 加载流程：先查Redis（绝大多数活跃玩家在缓存）→ 不存在则查DB → 写回Redis
+// 标记 DbState=DbDelete 表示是"临时占位" 主循环UserCopyAndSave轮询时会跳过保存
+//
+// 关键约束：调用 LoadTempOfflineUser 取档后 修改并保存必须配套调 SaveTempOfflineUser
+// 否则分布式锁不会释放 该玩家在其他GS会被锁住
 
-// LoadTempOfflineUser 加载临时离线玩家
-// 正常情况速度较快可以同步阻塞调用
+// LoadTempOfflineUser 加载离线玩家档（含远程在线玩家场景）
+// lock=true 加分布式锁（修改场景必须true）lock=false 仅读不锁（如查询场景）
+// 正常情况Redis命中 速度较快可在主循环同步阻塞调用 极少数情况走DB回源
+// TODO 防止恶意攻击造成redis缓存穿透
 func (u *UserManager) LoadTempOfflineUser(userId uint32, lock bool) *model.Player {
 	if userId < PlayerBaseUid || userId > MaxPlayerBaseUid {
 		logger.Error("try to load a not exist uid, uid: %v", userId)
@@ -567,12 +644,20 @@ func (u *UserManager) GetSaveUserChan() chan *SaveUserData {
 	return u.saveUserChan
 }
 
+// SaveUserData 主循环→保存协程的数据包
+// insertPlayerList/updatePlayerList 是已经序列化好的msgpack字节数据 保存协程只负责写库
+// exitSave=true 表示是停服时的最后一次保存 写完会通知 EXIT_SAVE_FIN_CHAN
 type SaveUserData struct {
 	insertPlayerList [][]byte
 	updatePlayerList [][]byte
 	exitSave         bool
 }
 
+// saveUserHandle 启动两个常驻goroutine
+//  1. 定时触发器：每分钟向主循环投递 RunUserCopyAndSave 事件 主循环执行 UserCopyAndSave 序列化数据
+//  2. 实际写库器：从 saveUserChan 接收已序列化的数据 同步写DB+Redis
+//
+// 解耦"序列化"（主循环单线程内）和"写库"（异步goroutine）防止DB卡死整个GS
 func (u *UserManager) saveUserHandle() {
 	go func() {
 		ticker := time.NewTicker(time.Minute)
@@ -621,9 +706,10 @@ func (u *UserManager) saveUserHandle() {
 }
 
 const (
-	UserCopyGoroutineLimit = 4
+	UserCopyGoroutineLimit = 4 // 序列化并发度 每批最多4个玩家档同时msgpack
 )
 
+// PlayerLastSaveTimeSortList 按 LastSaveTime 升序排序 优先保存最久未存档的玩家
 type PlayerLastSaveTimeSortList []*model.Player
 
 func (p PlayerLastSaveTimeSortList) Len() int {
@@ -638,6 +724,14 @@ func (p PlayerLastSaveTimeSortList) Swap(i, j int) {
 	p[i], p[j] = p[j], p[i]
 }
 
+// UserCopyAndSave 主循环执行的"序列化阶段" 由 LocalEvent RunUserCopyAndSave/ExitRunUserCopyAndSave 触发
+// 流程：按LastSaveTime排序所有在线玩家 → 分批4并发msgpack序列化 → 装包后投递给saveUserChan
+// **关键性能保护：单次主循环执行总耗时上限10ms 超时直接中止**
+//   - 4并发是 UserCopyGoroutineLimit 实测每个玩家档msgpack约2-5ms
+//   - 玩家多时这一轮存不完没关系 下一分钟继续
+//   - 排序确保不会"饿死"某些玩家（每次都从最久未存的开始）
+//
+// exitSave=true 是停服情况 不限时全部保存 写完通知 EXIT_SAVE_FIN_CHAN 让进程退出
 func (u *UserManager) UserCopyAndSave(exitSave bool) {
 	startTime := time.Now().UnixNano()
 	playerList := make(PlayerLastSaveTimeSortList, 0)
@@ -727,6 +821,8 @@ func (u *UserManager) UserCopyAndSave(exitSave bool) {
 	logger.Info("run save user copy cost time: %v ns, save user count: %v", costTime, saveCount)
 }
 
+// LoadUserFromDbSync 从DB按uid查询玩家档（GORM/MongoDB自动选）
+// 阻塞IO 仅在goroutine内调用
 func (u *UserManager) LoadUserFromDbSync(userId uint32) (*model.Player, error) {
 	player, err := u.db.QueryPlayerById(userId)
 	if err != nil {
@@ -736,6 +832,8 @@ func (u *UserManager) LoadUserFromDbSync(userId uint32) (*model.Player, error) {
 	return player, nil
 }
 
+// SaveUserToDbSync 单玩家落库 按 DbState 决定 Insert/Update（DbDelete也走Update防止数据丢失）
+// 阻塞IO 仅在goroutine内调用
 func (u *UserManager) SaveUserToDbSync(player *model.Player) {
 	if player.DbState == model.DbInsert {
 		err := u.db.InsertPlayer(player)
@@ -754,6 +852,7 @@ func (u *UserManager) SaveUserToDbSync(player *model.Player) {
 	}
 }
 
+// SaveUserListToDbSync 批量落库 提高吞吐 由 saveUserHandle 的写库goroutine调用
 func (u *UserManager) SaveUserListToDbSync(insertPlayerList []*model.Player, updatePlayerList []*model.Player) {
 	err := u.db.InsertPlayerList(insertPlayerList)
 	if err != nil {
@@ -768,6 +867,9 @@ func (u *UserManager) SaveUserListToDbSync(insertPlayerList []*model.Player, upd
 	logger.Info("save user finish, insert user count: %v, update user count: %v", len(insertPlayerList), len(updatePlayerList))
 }
 
+// LoadUserChatMsgFromDbSync 加载玩家全部历史聊天记录 按对话方uid分组
+// 每对私聊保留最新 MaxMsgListLen 条 sequence从101开始递增（客户端用sequence增量拉取）
+// 登录时调用 仅查DB不查Redis（聊天记录不缓存）
 func (u *UserManager) LoadUserChatMsgFromDbSync(userId uint32) map[uint32][]*model.ChatMsg {
 	chatMsgMap := make(map[uint32][]*model.ChatMsg)
 	chatMsgList, err := u.db.QueryChatMsgListByUid(userId)
@@ -849,10 +951,14 @@ func (u *UserManager) SaveUserListToRedisSync(setPlayerList []*model.Player) {
 	u.db.SetRedisPlayerList(setPlayerList)
 }
 
+// AsyncWriteDb 通用异步DB写入入口 把任意闭包投递到异步队列
+// 用于聊天记录、邮件等不与玩家档绑定的小事务（玩家档定时存有专门通道）
+// 调用方传入闭包通过 u 参数访问DB 闭包内执行的IO不会卡主循环
 func (u *UserManager) AsyncWriteDb(fn func(u *UserManager)) {
 	u.asyncWriteDbChan <- fn
 }
 
+// asyncWriteDbHandle 异步DB写入队列消费者 单goroutine顺序执行投递的闭包
 func (u *UserManager) asyncWriteDbHandle() {
 	go func() {
 		for {

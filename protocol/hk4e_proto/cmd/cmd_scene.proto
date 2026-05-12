@@ -1,3 +1,5 @@
+// 场景相关协议
+
 syntax = "proto3";
 
 package proto;
@@ -9,14 +11,14 @@ option go_package = "./;proto";
 
 enum EnterType {
     ENTER_NONE = 0;
-    ENTER_SELF = 1;
-    ENTER_GOTO = 2;
-    ENTER_JUMP = 3;
-    ENTER_OTHER = 4;
-    ENTER_BACK = 5;
-    ENTER_DUNGEON = 6;
-    ENTER_DUNGEON_REPLAY = 7;
-    ENTER_GOTO_BY_PORTAL = 8;
+    ENTER_SELF = 1;           // 进入自己的场景
+    ENTER_GOTO = 2;           // 跳点
+    ENTER_JUMP = 3;           // 跳场景(自己的场景)
+    ENTER_OTHER = 4;          // 进入别人的场景
+    ENTER_BACK = 5;           // 返回自己的场景
+    ENTER_DUNGEON = 6;        // 进入副本
+    ENTER_DUNGEON_REPLAY = 7; // 在副本中选择重玩
+    ENTER_GOTO_BY_PORTAL = 8; // 玩家在场景内通过传送门跳点(主要用于客户端)
     ENTER_SELF_HOME = 9;
     ENTER_OTHER_HOME = 10;
     ENTER_GOTO_RECREATE = 11;
@@ -24,16 +26,16 @@ enum EnterType {
 
 enum VisionType {
     VISION_NONE = 0;
-    VISION_MEET = 1;
-    VISION_REBORN = 2;
-    VISION_REPLACE = 3;
-    VISION_WAYPOINT_REBORN = 4;
-    VISION_MISS = 5;
-    VISION_DIE = 6;
-    VISION_GATHER_ESCAPE = 7;
-    VISION_REFRESH = 8;
-    VISION_TRANSPORT = 9;
-    VISION_REPLACE_DIE = 10;
+    VISION_MEET = 1;            // 出现(进入视野)
+    VISION_REBORN = 2;          // 重生
+    VISION_REPLACE = 3;         // 主动更换
+    VISION_WAYPOINT_REBORN = 4; // 副本路点重生
+    VISION_MISS = 5;            // 消失(离开视野)
+    VISION_DIE = 6;             // 死亡
+    VISION_GATHER_ESCAPE = 7;   // 目前只用于环境小动物采集时逃走
+    VISION_REFRESH = 8;         // group刷新导致物件消失(TODO...暂且不会发给客户端)
+    VISION_TRANSPORT = 9;       // 在同一个场景内传送
+    VISION_REPLACE_DIE = 10;    // 客户端需要区分死亡换人和主动换人
     VISION_REPLACE_NO_NOTIFY = 11;
     VISION_BORN = 12;
     VISION_PICKUP = 13;
@@ -45,15 +47,17 @@ enum VisionType {
     VISION_CAPTURE_DISAPPEAR = 19;
 }
 
+// 创建原因
 enum CreateReason {
     CREATE_NONE = 0;
     CREATE_QUEST = 1;
     CREATE_ENERGY = 2;
 }
 
+// 传送原因
 enum TransmitReason {
     TRANSMIT_NONE = 0;
-    TRANSMIT_QUEST = 1;
+    TRANSMIT_QUEST = 1; // 任务
 }
 
 enum SealBattleType {
@@ -84,24 +88,25 @@ message PlayerEnterSceneNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 prev_scene_id = 6;
-    uint32 dungeon_id = 12;
+    uint32 prev_scene_id = 6;     // 进入之前的场景ID
+    uint32 dungeon_id = 12;       // 进入大世界时为0
     bool is_skip_ui = 1732;
-    uint32 scene_id = 15;
-    EnterType type = 13;
-    uint64 scene_begin_time = 14;
-    uint32 world_level = 11;
+    uint32 scene_id = 15;         // 场景ID
+    EnterType type = 13;          // 进入类型
+    uint64 scene_begin_time = 14; // 场景开始的时间(1970.1.1到现在的毫秒数)
+    uint32 world_level = 11;      // 大世界等级, 如果是dungeon该字段无效
     uint32 world_type = 1490;
-    uint32 target_uid = 4;
+    uint32 target_uid = 4;        // 场景所属的玩家ID
     bool is_first_login_enter_scene = 3;
     repeated uint32 scene_tag_id_list = 5;
     string scene_transaction = 1842;
-    Vector prev_pos = 8;
+    Vector prev_pos = 8;          // 进入之前的位置
     uint32 enter_reason = 1828;
-    Vector pos = 7;
-    uint32 enter_scene_token = 2;
+    Vector pos = 7;               // 位置
+    uint32 enter_scene_token = 2; // 进场token，用于区分不同的进场流程
 }
 
+// 退出当前场景
 message LeaveSceneReq {
     enum CmdId {
         option allow_alias = true;
@@ -125,6 +130,7 @@ message LeaveSceneRsp {
     int32 retcode = 3;
 }
 
+// C->S场景初始化完成
 message SceneInitFinishReq {
     enum CmdId {
         option allow_alias = true;
@@ -135,7 +141,7 @@ message SceneInitFinishReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 enter_scene_token = 11;
+    uint32 enter_scene_token = 11; // 进场token
 }
 
 message SceneInitFinishRsp {
@@ -152,6 +158,7 @@ message SceneInitFinishRsp {
     uint32 enter_scene_token = 8;
 }
 
+// 地图上的实体出现通知
 message SceneEntityAppearNotify {
     enum CmdId {
         option allow_alias = true;
@@ -161,11 +168,12 @@ message SceneEntityAppearNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    VisionType appear_type = 15;
-    uint32 param = 9;
-    repeated SceneEntityInfo entity_list = 5;
+    VisionType appear_type = 15;              // 出现类型
+    uint32 param = 9;                         // 出现参数
+    repeated SceneEntityInfo entity_list = 5; // 实体列表
 }
 
+// 地图上的实体消失通知
 message SceneEntityDisappearNotify {
     enum CmdId {
         option allow_alias = true;
@@ -176,10 +184,11 @@ message SceneEntityDisappearNotify {
     }
 
     uint32 param = 6;
-    repeated uint32 entity_list = 1;
-    VisionType disappear_type = 2;
+    repeated uint32 entity_list = 1; // 实体ID列表
+    VisionType disappear_type = 2;   // 消失类型
 }
 
+// 地图上的实体移动请求
 message SceneEntityMoveReq {
     enum CmdId {
         option allow_alias = true;
@@ -190,10 +199,10 @@ message SceneEntityMoveReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    MotionInfo motion_info = 7;
-    uint32 scene_time = 4;
-    uint32 entity_id = 8;
-    uint32 reliable_seq = 15;
+    MotionInfo motion_info = 7; // 运动信息
+    uint32 scene_time = 4;      // 地图时间
+    uint32 entity_id = 8;       // 实体ID
+    uint32 reliable_seq = 15;   // 可靠包的序列号(对于不可靠包，则为上一个可靠包的序列号)
 }
 
 message SceneEntityMoveRsp {
@@ -205,13 +214,14 @@ message SceneEntityMoveRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 entity_id = 4;
-    MotionInfo fail_motion = 1;
-    uint32 scene_time = 10;
-    uint32 reliable_seq = 6;
+    uint32 entity_id = 4;       // 实体ID
+    MotionInfo fail_motion = 1; // 失败时的运动信息
+    uint32 scene_time = 10;     // 失败时的地图时间
+    uint32 reliable_seq = 6;    // 失败时的序列号
     int32 retcode = 8;
 }
 
+// 地图上的角色消耗体力移动请求
 message SceneAvatarStaminaStepReq {
     enum CmdId {
         option allow_alias = true;
@@ -222,7 +232,7 @@ message SceneAvatarStaminaStepReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    bool use_client_rot = 15;
+    bool use_client_rot = 15; // 是否使用客户端朝向
     Vector rot = 7;
 }
 
@@ -240,6 +250,7 @@ message SceneAvatarStaminaStepRsp {
     Vector rot = 11;
 }
 
+// 地图上的实体移动通知(S->C)
 message SceneEntityMoveNotify {
     enum CmdId {
         option allow_alias = true;
@@ -249,10 +260,10 @@ message SceneEntityMoveNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    MotionInfo motion_info = 6;
-    uint32 entity_id = 8;
-    uint32 scene_time = 15;
-    uint32 reliable_seq = 2;
+    MotionInfo motion_info = 6; // 运动信息
+    uint32 entity_id = 8;       // 实体ID
+    uint32 scene_time = 15;     // 地图时间
+    uint32 reliable_seq = 2;    // 可靠包的序列号(对于不可靠包，则为上一个可靠包的序列号)
 }
 
 message VehicleLocationInfo {
@@ -277,9 +288,10 @@ message ScenePlayerLocationNotify {
 
     repeated VehicleLocationInfo vehicle_loc_list = 3;
     uint32 scene_id = 9;
-    repeated PlayerLocationInfo player_loc_list = 14;
+    repeated PlayerLocationInfo player_loc_list = 14; // 所有玩家的位置信息
 }
 
+// 请求地图上的已经解锁的传送点、地下城入口信息，不包含默认解锁的
 message GetScenePointReq {
     enum CmdId {
         option allow_alias = true;
@@ -290,8 +302,8 @@ message GetScenePointReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 belong_uid = 10;
-    uint32 scene_id = 4;
+    uint32 belong_uid = 10; // 所属的玩家ID
+    uint32 scene_id = 4;    // 场景ID
 }
 
 message CityInfo {
@@ -309,20 +321,21 @@ message GetScenePointRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    repeated uint32 not_explored_dungeon_entry_list = 11;
-    repeated uint32 to_be_explore_dungeon_entry_list = 15;
-    repeated uint32 locked_point_list = 2;
+    repeated uint32 not_explored_dungeon_entry_list = 11;  // 未被探索解锁的地城入口config ID列表
+    repeated uint32 to_be_explore_dungeon_entry_list = 15; // 待探索地城入口config ID列表
+    repeated uint32 locked_point_list = 2;                 // 已锁的传送点列表
     repeated uint32 unhide_point_list = 5;
     int32 retcode = 9;
-    uint32 belong_uid = 12;
-    repeated uint32 unlocked_point_list = 13;
-    repeated uint32 unlock_area_list = 1;
+    uint32 belong_uid = 12;                                // 所属的玩家ID
+    repeated uint32 unlocked_point_list = 13;              // 所有已解锁传送点列表
+    repeated uint32 unlock_area_list = 1;                  // 已解锁的一级区域
     repeated uint32 hide_point_list = 4;
-    uint32 scene_id = 14;
+    uint32 scene_id = 14;                                  // 场景ID
     repeated uint32 not_interact_dungeon_entry_list = 6;
-    repeated uint32 group_unlimit_point_list = 10;
+    repeated uint32 group_unlimit_point_list = 10;         // group未解锁的点列表
 }
 
+// 进入传送点区域通知(C->S), 女神像传送点
 message EnterTransPointRegionNotify {
     enum CmdId {
         option allow_alias = true;
@@ -333,10 +346,11 @@ message EnterTransPointRegionNotify {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 scene_id = 8;
-    uint32 point_id = 6;
+    uint32 scene_id = 8; // 地图ID
+    uint32 point_id = 6; // 传送点ID
 }
 
+// 离开传送点区域通知(C->S), 女神像传送点
 message ExitTransPointRegionNotify {
     enum CmdId {
         option allow_alias = true;
@@ -347,10 +361,11 @@ message ExitTransPointRegionNotify {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 point_id = 1;
-    uint32 scene_id = 7;
+    uint32 point_id = 1; // 传送点ID
+    uint32 scene_id = 7; // 地图ID
 }
 
+// 解锁传送点、地下城入口通知(S->C，解锁传送点以此协议为准)
 message ScenePointUnlockNotify {
     enum CmdId {
         option allow_alias = true;
@@ -360,13 +375,14 @@ message ScenePointUnlockNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    repeated uint32 point_list = 13;
-    uint32 scene_id = 6;
+    repeated uint32 point_list = 13;       // 新增的已解锁传送点列表
+    uint32 scene_id = 6;                   // 地图ID
     repeated uint32 unhide_point_list = 12;
     repeated uint32 hide_point_list = 1;
-    repeated uint32 locked_point_list = 8;
+    repeated uint32 locked_point_list = 8; // 新增的被关闭的传送点列表
 }
 
+// 传送到目的点
 message SceneTransToPointReq {
     enum CmdId {
         option allow_alias = true;
@@ -377,8 +393,8 @@ message SceneTransToPointReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 scene_id = 13;
-    uint32 point_id = 1;
+    uint32 scene_id = 13; // 地图ID
+    uint32 point_id = 1;  // 目的传送点ID
 }
 
 message SceneTransToPointRsp {
@@ -390,11 +406,12 @@ message SceneTransToPointRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 point_id = 14;
-    uint32 scene_id = 3;
+    uint32 point_id = 14; // 目的传送点ID
+    uint32 scene_id = 3;  // 地图ID
     int32 retcode = 8;
 }
 
+// 地图上的实体跳点通知
 message EntityJumpNotify {
     enum CmdId {
         option allow_alias = true;
@@ -404,18 +421,20 @@ message EntityJumpNotify {
         ENET_IS_RELIABLE = 1;
     }
 
+    // 跳点类型
     enum Type {
         NULL = 0;
-        ACTIVE = 1;
-        PASSIVE = 2;
+        ACTIVE = 1;  // 主动跳点
+        PASSIVE = 2; // 被动跳点
     }
 
-    Type jump_type = 9;
-    Vector rot = 8;
-    Vector pos = 10;
+    Type jump_type = 9; // 跳点类型
+    Vector rot = 8;     // 目的朝向
+    Vector pos = 10;    // 目的位置
     uint32 entity_id = 12;
 }
 
+// 请求地图上的区域信息
 message GetSceneAreaReq {
     enum CmdId {
         option allow_alias = true;
@@ -426,8 +445,8 @@ message GetSceneAreaReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 scene_id = 4;
-    uint32 belong_uid = 7;
+    uint32 scene_id = 4;   // 地图ID
+    uint32 belong_uid = 7; // 所属的玩家ID
 }
 
 message GetSceneAreaRsp {
@@ -440,11 +459,12 @@ message GetSceneAreaRsp {
     }
 
     int32 retcode = 7;
-    repeated CityInfo city_info_list = 13;
-    uint32 scene_id = 15;
-    repeated uint32 area_id_list = 9;
+    repeated CityInfo city_info_list = 13; // 城市信息
+    uint32 scene_id = 15;                  // 地图ID
+    repeated uint32 area_id_list = 9;      // 已解锁区域列表
 }
 
+// 地图上的区域解锁通知(S->C)
 message SceneAreaUnlockNotify {
     enum CmdId {
         option allow_alias = true;
@@ -454,10 +474,11 @@ message SceneAreaUnlockNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    repeated uint32 area_list = 10;
-    uint32 scene_id = 9;
+    repeated uint32 area_list = 10; // 新增的已解锁区域列表
+    uint32 scene_id = 9;            // 地图ID
 }
 
+// 地图上的实体淹死
 message SceneEntityDrownReq {
     enum CmdId {
         option allow_alias = true;
@@ -468,7 +489,7 @@ message SceneEntityDrownReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 entity_id = 10;
+    uint32 entity_id = 10; // 实体ID
 }
 
 message SceneEntityDrownRsp {
@@ -481,9 +502,10 @@ message SceneEntityDrownRsp {
     }
 
     int32 retcode = 8;
-    uint32 entity_id = 11;
+    uint32 entity_id = 11; // 实体ID
 }
 
+// 在地图上创建实体
 message SceneCreateEntityReq {
     enum CmdId {
         option allow_alias = true;
@@ -495,8 +517,8 @@ message SceneCreateEntityReq {
     }
 
     CreateEntityInfo entity = 1;
-    bool is_destroy_when_disconnect = 10;
-    CreateReason reason = 3;
+    bool is_destroy_when_disconnect = 10; // 是否断线时销毁
+    CreateReason reason = 3;              // 创建原因
 }
 
 message SceneCreateEntityRsp {
@@ -509,10 +531,11 @@ message SceneCreateEntityRsp {
     }
 
     int32 retcode = 14;
-    uint32 entity_id = 1;
+    uint32 entity_id = 1; // 创建的实体ID
     CreateEntityInfo entity = 10;
 }
 
+// 在地图上销毁实体
 message SceneDestroyEntityReq {
     enum CmdId {
         option allow_alias = true;
@@ -523,7 +546,7 @@ message SceneDestroyEntityReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 entity_id = 7;
+    uint32 entity_id = 7; // 删除的实体ID
 }
 
 message SceneDestroyEntityRsp {
@@ -536,9 +559,10 @@ message SceneDestroyEntityRsp {
     }
 
     int32 retcode = 14;
-    uint32 entity_id = 7;
+    uint32 entity_id = 7; // 删除的实体ID
 }
 
+// 地图上的力场解锁通知(S->C)
 message SceneForceUnlockNotify {
     enum CmdId {
         option allow_alias = true;
@@ -548,10 +572,11 @@ message SceneForceUnlockNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    bool is_add = 10;
-    repeated uint32 force_id_list = 2;
+    bool is_add = 10;                  // 是否为增加
+    repeated uint32 force_id_list = 2; // 解锁的力场列表
 }
 
+// 地图上的力场锁住通知(S->C)
 message SceneForceLockNotify {
     enum CmdId {
         option allow_alias = true;
@@ -561,9 +586,10 @@ message SceneForceLockNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    repeated uint32 force_id_list = 9;
+    repeated uint32 force_id_list = 9; // 锁住的力场列表
 }
 
+// 进入区域请求
 message EnterWorldAreaReq {
     enum CmdId {
         option allow_alias = true;
@@ -574,8 +600,8 @@ message EnterWorldAreaReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 area_type = 8;
-    uint32 area_id = 1;
+    uint32 area_type = 8; // 对应xml中的WorldAreaType
+    uint32 area_id = 1;   // 传送点ID
 }
 
 message EnterWorldAreaRsp {
@@ -587,11 +613,12 @@ message EnterWorldAreaRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 area_type = 1;
-    uint32 area_id = 7;
+    uint32 area_type = 1; // 对应xml中的WorldAreaType
+    uint32 area_id = 7;   // 传送点ID
     int32 retcode = 9;
 }
 
+// 强制同步实体的状态，任务使用
 message EntityForceSyncReq {
     enum CmdId {
         option allow_alias = true;
@@ -602,10 +629,10 @@ message EntityForceSyncReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 room_id = 1;
-    MotionInfo motion_info = 11;
-    uint32 entity_id = 13;
-    uint32 scene_time = 12;
+    uint32 room_id = 1;          // 房间编号
+    MotionInfo motion_info = 11; // 运动信息
+    uint32 entity_id = 13;       // 实体ID
+    uint32 scene_time = 12;      // 地图时间
 }
 
 message EntityForceSyncRsp {
@@ -617,9 +644,9 @@ message EntityForceSyncRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 scene_time = 14;
-    uint32 entity_id = 6;
-    MotionInfo fail_motion = 8;
+    uint32 scene_time = 14;     // 失败时的地图时间
+    uint32 entity_id = 6;       // 实体ID
+    MotionInfo fail_motion = 8; // 失败时的运动信息
     int32 retcode = 4;
 }
 
@@ -650,6 +677,7 @@ message GetAreaExplorePointRsp {
     repeated uint32 explore_point_list = 4;
 }
 
+// 客户端传送请求
 message ClientTransmitReq {
     enum CmdId {
         option allow_alias = true;
@@ -661,9 +689,9 @@ message ClientTransmitReq {
     }
 
     uint32 scene_id = 2;
-    TransmitReason reason = 14;
-    Vector pos = 1;
-    Vector rot = 9;
+    TransmitReason reason = 14; // 原因
+    Vector pos = 1;             // 位置
+    Vector rot = 9;             // 朝向
 }
 
 message ClientTransmitRsp {
@@ -675,10 +703,11 @@ message ClientTransmitRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    TransmitReason reason = 3;
+    TransmitReason reason = 3; // 原因
     int32 retcode = 9;
 }
 
+// 进入天气区域通知(C->S)
 message EnterSceneWeatherAreaNotify {
     enum CmdId {
         option allow_alias = true;
@@ -689,9 +718,10 @@ message EnterSceneWeatherAreaNotify {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 weather_gadget_id = 13;
+    uint32 weather_gadget_id = 13; // 天气区域物件ID
 }
 
+// 离开天气区域通知(C->S)
 message ExitSceneWeatherAreaNotify {
     enum CmdId {
         option allow_alias = true;
@@ -702,9 +732,10 @@ message ExitSceneWeatherAreaNotify {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 weather_gadget_id = 2;
+    uint32 weather_gadget_id = 2; // 天气区域物件ID
 }
 
+// 区域天气通知(S->C)
 message SceneAreaWeatherNotify {
     enum CmdId {
         option allow_alias = true;
@@ -714,22 +745,24 @@ message SceneAreaWeatherNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 weather_area_id = 1;
-    uint32 weather_gadget_id = 9;
-    uint32 climate_type = 14;
+    uint32 weather_area_id = 1;                 // 天气区域ID
+    uint32 weather_gadget_id = 9;               // 天气区域物件ID
+    uint32 climate_type = 14;                   // 天气类型（data::ClimateType）
     float trans_duration = 15;
-    map<uint32, string> weather_value_map = 10;
+    map<uint32, string> weather_value_map = 10; // 不同来源的天气值
 }
 
+// 场景中玩家的信息
 message ScenePlayerInfo {
-    uint32 scene_id = 10;
-    uint32 peer_id = 6;
-    OnlinePlayerInfo online_player_info = 13;
-    bool is_connected = 2;
-    string name = 15;
-    uint32 uid = 8;
+    uint32 scene_id = 10;                     // 场景id
+    uint32 peer_id = 6;                       // PeerID
+    OnlinePlayerInfo online_player_info = 13; // 玩家在线数据
+    bool is_connected = 2;                    // 是否离线
+    string name = 15;                         // 名字
+    uint32 uid = 8;                           // UID
 }
 
+// 玩家切换Scene时的广播信息(S->C)
 message ScenePlayerInfoNotify {
     enum CmdId {
         option allow_alias = true;
@@ -742,10 +775,11 @@ message ScenePlayerInfoNotify {
     repeated ScenePlayerInfo player_info_list = 5;
 }
 
+// 玩家的位置信息
 message PlayerLocationInfo {
-    uint32 uid = 15;
-    Vector pos = 3;
-    Vector rot = 13;
+    uint32 uid = 15; // UID
+    Vector pos = 3;  // 位置
+    Vector rot = 13; // 朝向
 }
 
 message PlayerWorldLocationInfo {
@@ -753,6 +787,7 @@ message PlayerWorldLocationInfo {
     PlayerLocationInfo player_loc = 12;
 }
 
+// 大世界中玩家的位置通知(S->C)
 message WorldPlayerLocationNotify {
     enum CmdId {
         option allow_alias = true;
@@ -763,9 +798,10 @@ message WorldPlayerLocationNotify {
     }
 
     repeated PlayerWorldLocationInfo player_world_loc_list = 8;
-    repeated PlayerLocationInfo player_loc_list = 15;
+    repeated PlayerLocationInfo player_loc_list = 15; // 所有玩家的位置信息
 }
 
+// 通知客户端镜头注目某个点
 message BeginCameraSceneLookNotify {
     enum CmdId {
         option allow_alias = true;
@@ -783,7 +819,7 @@ message BeginCameraSceneLookNotify {
     uint32 blend_type = 1154;
     float custom_radius = 7;
     bool is_set_screenXY = 5;
-    Vector look_pos = 4;
+    Vector look_pos = 4; // 需要注目的点
     bool is_recover_keep_current = 11;
     bool is_abs_follow_pos = 1375;
     KeepRotType keep_rot_type = 6;
@@ -799,9 +835,10 @@ message BeginCameraSceneLookNotify {
     repeated string other_params = 1;
     Vector follow_pos = 8;
     bool is_allow_input = 2;
-    float duration = 14;
+    float duration = 14; // 持续时间
 }
 
+// 通知客户端结束镜头注目
 message EndCameraSceneLookNotify {
     enum CmdId {
         option allow_alias = true;
@@ -812,6 +849,7 @@ message EndCameraSceneLookNotify {
     }
 }
 
+// 服务端创建实体，通知客户端在小地图上标识出来
 message MarkEntityInMinMapNotify {
     enum CmdId {
         option allow_alias = true;
@@ -822,10 +860,11 @@ message MarkEntityInMinMapNotify {
     }
 
     Vector position = 4;
-    uint32 monster_id = 7;
-    uint32 entity_id = 14;
+    uint32 monster_id = 7; // 怪物ID
+    uint32 entity_id = 14; // 创建的实体ID
 }
 
+// 取消小地图的怪物标记
 message UnmarkEntityInMinMapNotify {
     enum CmdId {
         option allow_alias = true;
@@ -835,9 +874,10 @@ message UnmarkEntityInMinMapNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 entity_id = 8;
+    uint32 entity_id = 8; // 创建的实体ID
 }
 
+// 客户端请求触发SourceEntityId相关的group trigger, 服务端会限制频率
 message ExecuteGroupTriggerReq {
     enum CmdId {
         option allow_alias = true;
@@ -848,12 +888,12 @@ message ExecuteGroupTriggerReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    string source_name = 15;
-    uint32 target_entity_id = 12;
-    int32 param2 = 8;
-    uint32 source_entity_id = 4;
-    int32 param3 = 10;
-    int32 param1 = 9;
+    string source_name = 15;      // 源名称
+    uint32 target_entity_id = 12; // 目标实体ID
+    int32 param2 = 8;             // 参数2
+    uint32 source_entity_id = 4;  // 源实体ID, 这个entity必须存在
+    int32 param3 = 10;            // 参数3
+    int32 param1 = 9;             // 参数1
 }
 
 message ExecuteGroupTriggerRsp {
@@ -868,6 +908,7 @@ message ExecuteGroupTriggerRsp {
     int32 retcode = 13;
 }
 
+// 客户端请求升级城市--充能
 message LevelupCityReq {
     enum CmdId {
         option allow_alias = true;
@@ -879,8 +920,8 @@ message LevelupCityReq {
     }
 
     uint32 scene_id = 5;
-    uint32 area_id = 3;
-    uint32 item_num = 14;
+    uint32 area_id = 3;   // 通过哪个女神像
+    uint32 item_num = 14; // 玩家充能使用的结晶
 }
 
 message LevelupCityRsp {
@@ -892,25 +933,28 @@ message LevelupCityRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 area_id = 9;
+    uint32 area_id = 9; // 通过哪个女神像
     int32 retcode = 3;
     uint32 scene_id = 4;
     CityInfo city_info = 6;
 }
 
+// 路径点改变信息
 message RoutePointChangeInfo {
-    float wait_time = 6;
-    float target_velocity = 14;
-    uint32 point_index = 11;
+    float wait_time = 6;        // 停留时间
+    float target_velocity = 14; // 目标速度
+    uint32 point_index = 11;    // 路径点索引
 }
 
+// 移动路径改变信息
 message SceneRouteChangeInfo {
-    bool is_forward = 12;
-    uint32 route_id = 15;
-    uint32 type = 4;
-    repeated RoutePointChangeInfo point_list = 1;
+    bool is_forward = 12;                         // 是否为正向
+    uint32 route_id = 15;                         // 路径ID
+    uint32 type = 4;                              // 路径类型(取值范围：TrailType)
+    repeated RoutePointChangeInfo point_list = 1; // 点改变信息
 }
 
+// 场景移动路径改变通知
 message SceneRouteChangeNotify {
     enum CmdId {
         option allow_alias = true;
@@ -920,11 +964,12 @@ message SceneRouteChangeNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 scene_id = 12;
-    uint32 scene_time = 11;
-    repeated SceneRouteChangeInfo route_list = 2;
+    uint32 scene_id = 12;                         // 场景ID
+    uint32 scene_time = 11;                       // 场景时间(毫秒)
+    repeated SceneRouteChangeInfo route_list = 2; // 路径改变信息
 }
 
+// 移动平台开始路径移动通知
 message PlatformStartRouteNotify {
     enum CmdId {
         option allow_alias = true;
@@ -934,11 +979,12 @@ message PlatformStartRouteNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    PlatformInfo platform = 15;
-    uint32 scene_time = 12;
-    uint32 entity_id = 8;
+    PlatformInfo platform = 15; // 移动平台信息
+    uint32 scene_time = 12;     // 场景时间(毫秒)
+    uint32 entity_id = 8;       // 移动平台实体ID
 }
 
+// 移动平台停止路径移动通知
 message PlatformStopRouteNotify {
     enum CmdId {
         option allow_alias = true;
@@ -948,11 +994,12 @@ message PlatformStopRouteNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 scene_time = 9;
-    uint32 entity_id = 12;
+    uint32 scene_time = 9; // 场景时间(毫秒)
+    uint32 entity_id = 12; // 移动平台实体ID
     PlatformInfo platform = 8;
 }
 
+// 移动平台改变路径通知
 message PlatformChangeRouteNotify {
     enum CmdId {
         option allow_alias = true;
@@ -962,11 +1009,12 @@ message PlatformChangeRouteNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 entity_id = 2;
-    PlatformInfo platform = 1;
+    uint32 entity_id = 2;      // 移动平台实体ID
+    PlatformInfo platform = 1; // 移动平台信息
     uint32 scene_time = 8;
 }
 
+// 播放音效通知
 message ScenePlayerSoundNotify {
     enum CmdId {
         option allow_alias = true;
@@ -982,11 +1030,12 @@ message ScenePlayerSoundNotify {
         PLAY_SOUND_STOP = 2;
     }
 
-    string sound_name = 4;
-    PlaySoundType play_type = 8;
-    Vector play_pos = 3;
+    string sound_name = 4;       // 音效名字
+    PlaySoundType play_type = 8; // 播放类型
+    Vector play_pos = 3;         // 播放位置
 }
 
+// 通过PersonalSceneJumpPoint在大世界、房间场景中切换场景
 message PersonalSceneJumpReq {
     enum CmdId {
         option allow_alias = true;
@@ -1014,6 +1063,7 @@ message PersonalSceneJumpRsp {
     Vector dest_pos = 11;
 }
 
+// 封印战斗开始通知
 message SealBattleBeginNotify {
     enum CmdId {
         option allow_alias = true;
@@ -1023,12 +1073,13 @@ message SealBattleBeginNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 seal_max_progress = 9;
-    uint32 seal_entity_id = 1;
-    uint32 seal_radius = 12;
+    uint32 seal_max_progress = 9; // 最大进度
+    uint32 seal_entity_id = 1;    // SealGadget entity id
+    uint32 seal_radius = 12;      // 圈半径
     SealBattleType battle_type = 14;
 }
 
+// 封印战斗结束通知
 message SealBattleEndNotify {
     enum CmdId {
         option allow_alias = true;
@@ -1038,10 +1089,11 @@ message SealBattleEndNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    bool is_win = 4;
-    uint32 seal_entity_id = 15;
+    bool is_win = 4;            // 是否胜利
+    uint32 seal_entity_id = 15; // SealGadget entity id
 }
 
+// 封印战斗进度同步
 message SealBattleProgressNotify {
     enum CmdId {
         option allow_alias = true;
@@ -1051,13 +1103,14 @@ message SealBattleProgressNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 seal_entity_id = 9;
-    uint32 max_progress = 10;
-    uint32 seal_radius = 4;
-    uint32 progress = 5;
-    uint32 end_time = 2;
+    uint32 seal_entity_id = 9; // SealGadget entity id
+    uint32 max_progress = 10;  // 最大进度
+    uint32 seal_radius = 4;    // 圈半径
+    uint32 progress = 5;       // 当前进度
+    uint32 end_time = 2;       // 结束时间
 }
 
+// 客户端打开或关闭道具/角色等会暂停时间的界面时通知服务器
 message ClientPauseNotify {
     enum CmdId {
         option allow_alias = true;
@@ -1068,32 +1121,35 @@ message ClientPauseNotify {
         IS_ALLOW_CLIENT = 1;
     }
 
-    bool is_open = 1;
+    bool is_open = 1; // 是否是打开界面
 }
 
+// 角色进入场景时的数据
 message AvatarEnterSceneInfo {
-    repeated ServerBuff server_buff_list = 14;
-    uint32 avatar_entity_id = 7;
-    AbilitySyncStateInfo weapon_ability_info = 12;
-    uint32 weapon_entity_id = 10;
-    AbilitySyncStateInfo avatar_ability_info = 2;
-    uint64 avatar_guid = 13;
-    uint64 weapon_guid = 9;
-    repeated uint32 buff_id_list = 5;
+    repeated ServerBuff server_buff_list = 14;     // ServerBuff列表
+    uint32 avatar_entity_id = 7;                   // 角色的实体ID(本场景唯一)
+    AbilitySyncStateInfo weapon_ability_info = 12; // 武器的技能信息
+    uint32 weapon_entity_id = 10;                  // 武器的实体ID(本场景唯一)
+    AbilitySyncStateInfo avatar_ability_info = 2;  // 角色的技能信息
+    uint64 avatar_guid = 13;                       // 角色的唯一ID
+    uint64 weapon_guid = 9;                        // 武器的唯一ID
+    repeated uint32 buff_id_list = 5;              // Buff列表
 }
 
+// 队伍进入场景时的信息
 message TeamEnterSceneInfo {
     AbilityControlBlock ability_control_block = 7;
-    AbilitySyncStateInfo team_ability_info = 10;
-    uint32 team_entity_id = 15;
+    AbilitySyncStateInfo team_ability_info = 10; // 队伍技能信息
+    uint32 team_entity_id = 15;                  // 队伍实体ID
 }
 
 message MPLevelEntityInfo {
-    AbilitySyncStateInfo ability_info = 2;
-    uint32 entity_id = 11;
-    uint32 authority_peer_id = 3;
+    AbilitySyncStateInfo ability_info = 2; // 技能信息
+    uint32 entity_id = 11;                 // 大Team entity_id
+    uint32 authority_peer_id = 3;          // authrity peer id
 }
 
+// 玩家进入场景的信息通知
 message PlayerEnterSceneInfoNotify {
     enum CmdId {
         option allow_alias = true;
@@ -1104,11 +1160,11 @@ message PlayerEnterSceneInfoNotify {
         IS_ALLOW_CLIENT = 1;
     }
 
-    TeamEnterSceneInfo team_enter_info = 8;
+    TeamEnterSceneInfo team_enter_info = 8;              // 队伍进入场景的信息
     uint32 enter_scene_token = 12;
-    repeated AvatarEnterSceneInfo avatar_enter_info = 7;
-    uint32 cur_avatar_entity_id = 6;
-    MPLevelEntityInfo mp_level_entity_info = 5;
+    repeated AvatarEnterSceneInfo avatar_enter_info = 7; // 角色进入场景的信息(场景跳点时不发)
+    uint32 cur_avatar_entity_id = 6;                     // 当前角色的实体ID
+    MPLevelEntityInfo mp_level_entity_info = 5;          // MP大team的信息
 }
 
 message JoinPlayerSceneReq {
@@ -1172,10 +1228,11 @@ message SceneKickPlayerNotify {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 target_uid = 8;
-    uint32 kicker_uid = 9;
+    uint32 target_uid = 8; // 被踢者
+    uint32 kicker_uid = 9; // 踢人者
 }
 
+// 玩家攻击只有客户端才创建的entity(目前只支持灌木)
 message HitClientTrivialNotify {
     enum CmdId {
         option allow_alias = true;
@@ -1190,6 +1247,7 @@ message HitClientTrivialNotify {
     uint32 owner_entity_id = 12;
 }
 
+// 回到我的大世界请求
 message BackMyWorldReq {
     enum CmdId {
         option allow_alias = true;
@@ -1264,6 +1322,7 @@ message AllSeenMonsterNotify {
     repeated uint32 monster_id_list = 4;
 }
 
+// 场景时间同步
 message SceneTimeNotify {
     enum CmdId {
         option allow_alias = true;
@@ -1273,11 +1332,12 @@ message SceneTimeNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint64 scene_time = 14;
+    uint64 scene_time = 14; // 玩家个人时间
     bool is_paused = 1;
     uint32 scene_id = 7;
 }
 
+// 客户端通知服务器可以跳场景了
 message EnterSceneReadyReq {
     enum CmdId {
         option allow_alias = true;
@@ -1288,9 +1348,10 @@ message EnterSceneReadyReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 enter_scene_token = 9;
+    uint32 enter_scene_token = 9; // 进场token
 }
 
+// 跳场景准备相应，Req和Rsp之间会收到各种Disappear
 message EnterSceneReadyRsp {
     enum CmdId {
         option allow_alias = true;
@@ -1304,6 +1365,7 @@ message EnterSceneReadyRsp {
     int32 retcode = 4;
 }
 
+// 在EnterSceneReadyReq和EnterSceneReadyRsp之间收到
 message EnterScenePeerNotify {
     enum CmdId {
         option allow_alias = true;
@@ -1313,12 +1375,13 @@ message EnterScenePeerNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 dest_scene_id = 12;
+    uint32 dest_scene_id = 12; // 目标场景ID
     uint32 enter_scene_token = 11;
-    uint32 host_peer_id = 14;
-    uint32 peer_id = 1;
+    uint32 host_peer_id = 14;  // 目标场景的host_peer_id
+    uint32 peer_id = 1;        // 在目标场景中的peer_id
 }
 
+// 客户端正式进入了场景
 message EnterSceneDoneReq {
     enum CmdId {
         option allow_alias = true;
@@ -1329,9 +1392,10 @@ message EnterSceneDoneReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 enter_scene_token = 11;
+    uint32 enter_scene_token = 11; // 进场token
 }
 
+// 正式进入场景响应，Req和Rsp之间会收到EntityAppear，触发任务完成等
 message EnterSceneDoneRsp {
     enum CmdId {
         option allow_alias = true;
@@ -1345,6 +1409,7 @@ message EnterSceneDoneRsp {
     int32 retcode = 7;
 }
 
+// 大世界死亡确认通知
 message WorldPlayerDieNotify {
     enum CmdId {
         option allow_alias = true;
@@ -1354,14 +1419,15 @@ message WorldPlayerDieNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    PlayerDieType die_type = 12;
+    PlayerDieType die_type = 12; // 最后一个avatar死亡类型
     uint32 murderer_entity_id = 15;
     oneof entity {
-        uint32 monster_id = 8;
-        uint32 gadget_id = 4;
+        uint32 monster_id = 8;   // 被怪物杀死
+        uint32 gadget_id = 4;    // 被机关弄死
     }
 }
 
+// 大世界复活确认
 message WorldPlayerReviveReq {
     enum CmdId {
         option allow_alias = true;
@@ -1373,6 +1439,7 @@ message WorldPlayerReviveReq {
     }
 }
 
+// 大世界复活确认响应
 message WorldPlayerReviveRsp {
     enum CmdId {
         option allow_alias = true;
@@ -1385,6 +1452,7 @@ message WorldPlayerReviveRsp {
     int32 retcode = 3;
 }
 
+// 进入别人的世界失败提示
 message JoinPlayerFailNotify {
     enum CmdId {
         option allow_alias = true;
@@ -1397,6 +1465,7 @@ message JoinPlayerFailNotify {
     int32 retcode = 11;
 }
 
+// 设置区域天气状态（C->S）
 message SetSceneWeatherAreaReq {
     enum CmdId {
         option allow_alias = true;
@@ -1407,10 +1476,11 @@ message SetSceneWeatherAreaReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 weather_gadget_id = 13;
-    map<uint32, string> weather_value_map = 4;
+    uint32 weather_gadget_id = 13;             // 天气区域物件ID
+    map<uint32, string> weather_value_map = 4; // 不同来源的天气值
 }
 
+// 设置区域天气状态的返回（S->C）
 message SetSceneWeatherAreaRsp {
     enum CmdId {
         option allow_alias = true;
@@ -1423,6 +1493,7 @@ message SetSceneWeatherAreaRsp {
     int32 retcode = 4;
 }
 
+// 客户端请求触发GadgetLua对应的函数: onClientExecuteReq
 message ExecuteGadgetLuaReq {
     enum CmdId {
         option allow_alias = true;
@@ -1433,10 +1504,10 @@ message ExecuteGadgetLuaReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 source_entity_id = 12;
-    int32 param3 = 1;
-    int32 param1 = 5;
-    int32 param2 = 14;
+    uint32 source_entity_id = 12; // 源实体ID, 这个entity必须存在
+    int32 param3 = 1;             // 参数3
+    int32 param1 = 5;             // 参数1
+    int32 param2 = 14;            // 参数2
 }
 
 message ExecuteGadgetLuaRsp {
@@ -1455,6 +1526,7 @@ message CutSceneExtraParam {
     repeated double detail_param_list = 1;
 }
 
+// 服务端通知客户端播放cutscene(S->C)
 message CutSceneBeginNotify {
     enum CmdId {
         option allow_alias = true;
@@ -1464,11 +1536,12 @@ message CutSceneBeginNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    bool is_wait_others = 9;
+    bool is_wait_others = 9; // 是否需要等待其他玩家播放完成
     uint32 cutscene_id = 14;
     repeated CutSceneExtraParam extra_param_list = 3;
 }
 
+// 客户端通知服务端CutScene播完(C->S), is_wait_others == true才需要发送
 message CutSceneFinishNotify {
     enum CmdId {
         option allow_alias = true;
@@ -1482,6 +1555,7 @@ message CutSceneFinishNotify {
     uint32 cutscene_id = 12;
 }
 
+// 服务端通知客户端cutscene结束(S->C)
 message CutSceneEndNotify {
     enum CmdId {
         option allow_alias = true;
@@ -1491,10 +1565,11 @@ message CutSceneEndNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    int32 retcode = 5;
+    int32 retcode = 5; // 所有客户端是否正常播放完cutscene
     uint32 cutscene_id = 14;
 }
 
+// 客户端通知脚本事件发生(C->S)
 message ClientScriptEventNotify {
     enum CmdId {
         option allow_alias = true;
@@ -1505,12 +1580,13 @@ message ClientScriptEventNotify {
         IS_ALLOW_CLIENT = 1;
     }
 
-    repeated int32 param_list = 9;
-    uint32 source_entity_id = 14;
-    uint32 event_type = 10;
-    uint32 target_entity_id = 13;
+    repeated int32 param_list = 9; // 参数列表
+    uint32 source_entity_id = 14;  // 事件来源实体ID
+    uint32 event_type = 10;        // 事件类型(取值范围：EventType)
+    uint32 target_entity_id = 13;  // 事件目标实体ID
 }
 
+// 地图上的合包后的实体移动请求
 message SceneEntitiesMovesReq {
     enum CmdId {
         option allow_alias = true;
@@ -1524,14 +1600,16 @@ message SceneEntitiesMovesReq {
     repeated EntityMoveInfo entity_move_info_list = 14;
 }
 
+// Entity移动失败信息
 message EntityMoveFailInfo {
     int32 retcode = 12;
-    uint32 scene_time = 9;
-    MotionInfo fail_motion = 14;
-    uint32 reliable_seq = 4;
-    uint32 entity_id = 10;
+    uint32 scene_time = 9;       // 失败时的地图时间
+    MotionInfo fail_motion = 14; // 失败时的运动信息
+    uint32 reliable_seq = 4;     // 失败时的序列号
+    uint32 entity_id = 10;       // 实体ID
 }
 
+// 地图上的合包后的实体移动回复(只回复失败的移动)
 message SceneEntitiesMovesRsp {
     enum CmdId {
         option allow_alias = true;
@@ -1544,6 +1622,7 @@ message SceneEntitiesMovesRsp {
     repeated EntityMoveFailInfo entity_move_fail_info_list = 11;
 }
 
+// 地图上的合包后的实体移动通知(S->C)
 message SceneEntitiesMoveCombineNotify {
     enum CmdId {
         option allow_alias = true;
@@ -1556,6 +1635,7 @@ message SceneEntitiesMoveCombineNotify {
     repeated EntityMoveInfo entity_move_info_list = 8;
 }
 
+// 客户端请求解锁二级传送点
 message UnlockTransPointReq {
     enum CmdId {
         option allow_alias = true;
@@ -1582,6 +1662,7 @@ message UnlockTransPointRsp {
     int32 retcode = 12;
 }
 
+// 天气预报请求（C->S）
 message SceneWeatherForcastReq {
     enum CmdId {
         option allow_alias = true;
@@ -1592,7 +1673,7 @@ message SceneWeatherForcastReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 weather_area_id = 15;
+    uint32 weather_area_id = 15; // 天气区域ID
 }
 
 message SceneWeatherForcastRsp {
@@ -1604,11 +1685,12 @@ message SceneWeatherForcastRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint64 next_climate_time = 14;
-    repeated uint32 forcast_climate_list = 2;
+    uint64 next_climate_time = 14;            // 下一次天气变化的游戏内时间
+    repeated uint32 forcast_climate_list = 2; // 用于天气预报的天气类型，间隔为游戏内的2小时
     int32 retcode = 4;
 }
 
+// 标记地图请求
 message MarkMapReq {
     enum CmdId {
         option allow_alias = true;
@@ -1620,17 +1702,18 @@ message MarkMapReq {
     }
 
     enum Operation {
-        ADD = 0;
-        MOD = 1;
-        DEL = 2;
-        GET = 3;
+        ADD = 0; // 添加
+        MOD = 1; // 修改
+        DEL = 2; // 删除
+        GET = 3; // 获取
     }
 
-    MapMarkPoint mark = 8;
-    MapMarkPoint old = 6;
-    Operation op = 9;
+    MapMarkPoint mark = 8; // 要添加/删除的标记（op==ADD||op==DEL） 替换后的新标记（op==MOD）
+    MapMarkPoint old = 6;  // 要替换的旧标记（仅op==MOD时有效）
+    Operation op = 9;      // 操作类型
 }
 
+// 标记地图响应
 message MarkMapRsp {
     enum CmdId {
         option allow_alias = true;
@@ -1640,10 +1723,11 @@ message MarkMapRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    repeated MapMarkPoint mark_list = 8;
-    int32 retcode = 11;
+    repeated MapMarkPoint mark_list = 8; // 所有的地图标记
+    int32 retcode = 11;                  // 返回码
 }
 
+// 推送所有地图标记数据
 message AllMarkPointNotify {
     enum CmdId {
         option allow_alias = true;
@@ -1653,7 +1737,7 @@ message AllMarkPointNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    repeated MapMarkPoint mark_list = 7;
+    repeated MapMarkPoint mark_list = 7; // 所有的地图标记
 }
 
 message WorldDataNotify {
@@ -1675,6 +1759,7 @@ message WorldDataNotify {
     map<uint32, PropValue> world_prop_map = 9;
 }
 
+// 客户端通知服务端Entity的room_id有变化
 message EntityMoveRoomNotify {
     enum CmdId {
         option allow_alias = true;
@@ -1689,6 +1774,7 @@ message EntityMoveRoomNotify {
     uint32 dest_room_id = 9;
 }
 
+// 玩家进入退出大世界时的广播通知S->C
 message WorldPlayerInfoNotify {
     enum CmdId {
         option allow_alias = true;
@@ -1700,10 +1786,11 @@ message WorldPlayerInfoNotify {
     }
 
     repeated PlayerWidgetInfo player_widget_info_list = 8;
-    repeated OnlinePlayerInfo player_info_list = 14;
-    repeated uint32 player_uid_list = 11;
+    repeated OnlinePlayerInfo player_info_list = 14; // 玩家在线数据
+    repeated uint32 player_uid_list = 11;            // 玩家uid列表, 用于确定1p, 2p等, 为0表示为空
 }
 
+// 客户端进入场景后
 message PostEnterSceneReq {
     enum CmdId {
         option allow_alias = true;
@@ -1714,9 +1801,10 @@ message PostEnterSceneReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 enter_scene_token = 12;
+    uint32 enter_scene_token = 12; // 进场token
 }
 
+// 客户端进入场景之后
 message PostEnterSceneRsp {
     enum CmdId {
         option allow_alias = true;
@@ -1730,29 +1818,31 @@ message PostEnterSceneRsp {
     uint32 enter_scene_token = 12;
 }
 
+// 聊天内容
 message ChatInfo {
     enum SystemHintType {
         CHAT_NONE = 0;
-        CHAT_ENTER_WORLD = 1;
-        CHAT_LEAVE_WORLD = 2;
+        CHAT_ENTER_WORLD = 1; // 玩家进入大世界
+        CHAT_LEAVE_WORLD = 2; // 玩家退出大世界
     }
 
     message SystemHint {
-        uint32 type = 14;
+        uint32 type = 14; // 消息类型
     }
 
     uint32 time = 13;
     uint32 sequence = 10;
     uint32 to_uid = 7;
-    uint32 uid = 15;
+    uint32 uid = 15;                   // 玩家uid
     bool is_read = 5;
     oneof content {
-        string text = 1946;
-        uint32 icon = 914;
-        SystemHint system_hint = 1753;
+        string text = 1946;            // 玩家输入的聊天文本
+        uint32 icon = 914;             // 玩家输入的表情数据
+        SystemHint system_hint = 1753; // 系统消息通知
     }
 }
 
+// 玩家在当前世界中聊天
 message PlayerChatReq {
     enum CmdId {
         option allow_alias = true;
@@ -1764,7 +1854,7 @@ message PlayerChatReq {
     }
 
     uint32 channel_id = 13;
-    ChatInfo chat_info = 15;
+    ChatInfo chat_info = 15; // 聊天内容
 }
 
 message PlayerChatRsp {
@@ -1777,9 +1867,10 @@ message PlayerChatRsp {
     }
 
     uint32 chat_forbidden_endtime = 15;
-    int32 retcode = 2;
+    int32 retcode = 2; // 返回码
 }
 
+// 玩家聊天内容的广播协议
 message PlayerChatNotify {
     enum CmdId {
         option allow_alias = true;
@@ -1789,10 +1880,11 @@ message PlayerChatNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    ChatInfo chat_info = 3;
+    ChatInfo chat_info = 3; // 聊天内容
     uint32 channel_id = 6;
 }
 
+// 聊天过快进入CD
 message PlayerChatCDNotify {
     enum CmdId {
         option allow_alias = true;
@@ -1802,7 +1894,7 @@ message PlayerChatCDNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 over_time = 15;
+    uint32 over_time = 15; // 结束时间
 }
 
 message ChatHistoryNotify {
@@ -1840,9 +1932,9 @@ message DungeonEntryToBeExploreNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 dungeon_entry_scene_point_id = 2;
+    uint32 dungeon_entry_scene_point_id = 2; // 地城入口ScenePoint ID
     uint32 scene_id = 4;
-    uint32 dungeon_entry_config_id = 10;
+    uint32 dungeon_entry_config_id = 10;     // 地城入口配置ID
 }
 
 message GetDungeonEntryExploreConditionReq {
@@ -1856,8 +1948,8 @@ message GetDungeonEntryExploreConditionReq {
     }
 
     uint32 scene_id = 6;
-    uint32 dungeon_entry_config_id = 2;
-    uint32 dungeon_entry_scene_point_id = 4;
+    uint32 dungeon_entry_config_id = 2;      // 地城入口配置ID
+    uint32 dungeon_entry_scene_point_id = 4; // 地城入口ScenePoint ID
 }
 
 message DungeonEntryCond {
@@ -1875,9 +1967,10 @@ message GetDungeonEntryExploreConditionRsp {
     }
 
     DungeonEntryCond dungeon_entry_cond = 5;
-    int32 retcode = 3;
+    int32 retcode = 3; // 返回码
 }
 
+// 解谜地城
 message UnfreezeGroupLimitNotify {
     enum CmdId {
         option allow_alias = true;
@@ -1891,6 +1984,7 @@ message UnfreezeGroupLimitNotify {
     uint32 scene_id = 11;
 }
 
+// 客户端设置表现用的数据
 message SetEntityClientDataNotify {
     enum CmdId {
         option allow_alias = true;
@@ -1902,7 +1996,7 @@ message SetEntityClientDataNotify {
     }
 
     uint32 entity_id = 14;
-    EntityClientData entity_client_data = 9;
+    EntityClientData entity_client_data = 9; // 不能超过1KB
 }
 
 message GroupSuiteNotify {

@@ -1,3 +1,15 @@
+// 通用随机数工具集
+//
+// 与 hk4e_mt19937.go 不同：
+//   - mt19937 是与原神客户端一致的算法（用于密钥派生）
+//   - 本文件是 Go 标准库 math/rand 的便利封装（用于业务逻辑）
+//
+// 提供：
+//   - GetRandomStr: 随机字符串（账号 ID / Token 等）
+//   - GetRandomByte: 随机字节切片
+//   - GetRandomInt32 / Float32 / Float64: 范围内随机数
+//   - GetRandomByteHexStr: 随机字节的 hex 字符串（如 ComboToken）
+
 package random
 
 import (

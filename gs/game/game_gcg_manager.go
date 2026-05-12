@@ -13,6 +13,31 @@ import (
 	"github.com/flswld/halo/logger"
 )
 
+// 七圣召唤（GCG）模块 - **基本未做**
+//
+// **现状**（详见 CLAUDE.md "玩法实现状态"）：
+//   - 数据结构和阶段机框架完整（5 个 Phase + Controller + Card + Round 等）
+//   - 能进入对局界面 抽出 5 张手牌 选角色 投骰子
+//   - **PhaseMain 注释 "TODO 使用技能完善"** + **骰子固定全 Paimon 万能骰**
+//   - 不能正常对战：技能效果未实现 / 元素反应未实现 / AI 行动未实现
+//   - 整套完整实现需要从 0 设计：卡牌效果系统 / 对局 AI / 自动匹配 / 卡组编辑 / 牌库 / 战令奖励
+//
+// 5 个游戏阶段（按顺序）：
+//   - PHASE_START: 阶段开始 设置先手玩家允许操控
+//   - PHASE_DRAW: 抽手牌阶段 每个玩家抽 5 张
+//   - PHASE_ON_STAGE: 选角色阶段（无对应处理函数 等玩家发请求）
+//   - PHASE_DICE: 投骰子阶段 每人 8 个骰子（项目固定全 Paimon 万能骰）
+//   - PHASE_PRE_MAIN: 战前准备
+//   - PHASE_MAIN: 主操作阶段（核心 但**未实现** 仅占位）
+//
+// 数据流向：
+//   玩家请求 → game_gcg.go → GCGGame.ControllerXXX 操作
+//   → 生成 GCGMessage 消息包累加到 controller.msgPackList
+//   → SendMsgPack 时间戳触发把消息包合并发给客户端 / 接其他 controller
+//
+// AI 玩家：通过 GCGAi 结构体扮演 NPC 对手 但 ReceiveGCGMessagePackNotify 只是空壳
+//   AI 不会主动出牌/释放技能 玩家与 AI 对战时 AI 永远不行动 → 对局无法推进
+
 // ControllerType 操控者类型
 type ControllerType uint8
 
@@ -215,7 +240,13 @@ func (g *GCGManager) PhaseDraw(game *GCGGame) {
 	game.ChangePhase(proto.GCGPhaseType_GCG_PHASE_ON_STAGE)
 }
 
-// PhaseRollDice 阶段投掷骰子
+// PhaseRollDice 投骰子阶段（每个玩家 8 个骰子）
+//
+// **简化实现**：line 227 注释掉了真随机 改为固定 GCG_DICE_SIDE_PAIMON（万能骰）
+// 万能骰可以替代任何元素 → 玩家永远凑得出技能费用 大幅简化测试
+// 但失去了七圣召唤"骰子运气"这一核心机制
+//
+// 隐藏机制：发给其他玩家时只发骰子数量不发具体类型（防作弊）
 func (g *GCGManager) PhaseRollDice(game *GCGGame) {
 	// 给每位玩家投掷骰子
 	for _, controller := range game.controllerMap {
@@ -241,7 +272,9 @@ func (g *GCGManager) PhaseRollDice(game *GCGGame) {
 	// 等待玩家确认重投骰子
 }
 
-// PhasePreMain 阶段战斗开始
+// PhasePreMain 战斗开始（**仅占位** TODO 注释暴露未实现）
+// 写死了一段消息包让客户端不卡死 但实际上没有任何战斗效果
+// 真正的实现需要解析卡牌技能配置 + 模拟元素反应 + 处理 modifier 等
 func (g *GCGManager) PhasePreMain(game *GCGGame) {
 	// TODO 使用技能完善
 	game.AddAllMsgPack(0, proto.GCGActionType_GCG_ACTION_TRIGGER_SKILL, game.GCGMsgUseSkill(195, 33024), game.GCGMsgNewCard(), game.GCGMsgModifyAdd(2, proto.GCGReason_GCG_REASON_EFFECT, 4, []uint32{23}), game.GCGMsgUseSkillEnd(181, 33024))
@@ -316,6 +349,12 @@ func (g *GCGGame) CreateController() *GCGController {
 }
 
 // AddPlayer GCG游戏添加玩家
+//
+// 默认给玩家 2 张角色卡：
+//   - 1301: 凯亚（冰元素）
+//   - 1103: 香菱（火元素）
+//
+// 写死的初始卡组（无玩家自定义卡组功能）
 func (g *GCGGame) AddPlayer(player *model.Player) {
 	// 创建操控者
 	controller := g.CreateController()
@@ -328,7 +367,13 @@ func (g *GCGGame) AddPlayer(player *model.Player) {
 	player.GCGCurGameGuid = g.guid
 }
 
-// AddAI GCG游戏添加AI
+// AddAI GCG 游戏添加 AI 对手
+//
+// AI 自动 InitFinish（不像玩家需要等客户端回复）
+// 默认给 AI 2 张敌方角色卡：3001 / 3302
+//
+// **注意**：AI 仅占位 ReceiveGCGMessagePackNotify 是空函数 AI 永远不出招
+// 玩家与 AI 对战时 PHASE_MAIN 阶段 AI 不会行动 → 对局僵持
 func (g *GCGGame) AddAI() {
 	// 创建操控者
 	controller := g.CreateController()
@@ -400,7 +445,16 @@ func (g *GCGGame) GiveCharCard(controller *GCGController, charId uint32) {
 	}
 }
 
-// ChangePhase 游戏更改阶段
+// ChangePhase GCG 阶段切换（核心调度器）
+//
+// 处理：
+//  1. 修改 roundInfo.phaseType
+//  2. 按新阶段计算"哪些操控者允许操作"：
+//     · ON_STAGE/DICE: 所有人都允许（同时操作）
+//     · MAIN: 仅当前轮到的操控者允许（轮流）
+//  3. 发 NEXT_PHASE 消息包
+//  4. 调对应的 PhaseFunc 处理（PhaseStart/PhaseDraw/PhaseRollDice/PhasePreMain/PhaseMain）
+//  5. isLastMsgPack 标记防嵌套：如果 PhaseFunc 内又调了 ChangePhase 就不在内层发包
 func (g *GCGGame) ChangePhase(phase proto.GCGPhaseType) {
 	beforePhase := g.roundInfo.phaseType
 	// 修改游戏的阶段
@@ -547,7 +601,15 @@ func (g *GCGGame) ControllerReRollDice(controller *GCGController, diceIndexList 
 	g.ChangePhase(proto.GCGPhaseType_GCG_PHASE_PRE_MAIN)
 }
 
-// ControllerUseSkill 操控者使用技能
+// ControllerUseSkill 操控者使用技能（**简化实现** 写死的固定伤害）
+//
+// 写死的逻辑：
+//   - 对方角色卡固定扣 6 点血（GCG_TOKEN_TYPE_CUR_HEALTH -6）
+//   - 自身充能 +3
+//   - 没有元素反应/伤害类型/抗性/buff
+//
+// 真正的实现需要解析 GCG 卡牌的技能配置 + 元素反应矩阵 + Modifier 系统
+// 当前的简化让"出招"的视觉效果看起来正常 但实际数值与官服完全不同
 func (g *GCGGame) ControllerUseSkill(controller *GCGController, skillId uint32, costDiceIndexList []uint32) {
 	logger.Error("controller use skill, id: %v, skillId: %v", controller.controllerId, skillId)
 	// 获取对方的操控者对象

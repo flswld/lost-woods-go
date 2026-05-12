@@ -15,6 +15,15 @@ import (
 	"github.com/flswld/halo/logger"
 )
 
+// gm 服启动入口
+//
+// gm 是运维 HTTP 后台 与其他服务不同：
+//   - **不向 Node 注册自己**（gm 是控制面 不接受游戏流量）
+//   - 通过 natsrpc 连 Node + 直接调 GMService 操作 GS
+//   - MQ AppId 写死 "gm"
+//   - 监听 HTTP 端口 9001 提供 GM 命令/停服管理/白名单管理 等接口
+//
+// 主要服务：详见 controller.go 的路由注册
 func Run(ctx context.Context) error {
 	if !config.GetConfig().Hk4e.StandaloneModeEnable {
 		logger.InitLogger(&logger.Config{

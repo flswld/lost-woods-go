@@ -18,11 +18,32 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
+// PUBG 玩法插件 - 项目自创玩法的典型实现
+//
+// 核心机制（详见 CLAUDE.md "AI 世界" 章节）：
+//   - 跑在 AI 世界容器里（uid<PlayerBaseUid 不受 4 人上限约束 可同时容纳几十/上百玩家）
+//   - 类似经典吃鸡：缩圈毒区 + 全图武器拾取 + 弓箭对射
+//   - 多种弓箭子弹通过物理引擎模拟轨迹+命中判定（gs/game/game_physics_engine.go）
+//   - 每次玩家进入 AI 世界 PluginPubg 给玩家注入隐藏小图标 + 开 GM 按钮的 Lua bytecode
+//
+// 4 阶段（PUBG_PHASE_*）：
+//   - WAIT (-1): 等待玩家进入 显示倒计时
+//   - START (0): 游戏开始 第 1 圈缩圈倒计时启动
+//   - II (2): 第 2 圈起 进入持续缩圈阶段（每分钟更新一次）
+//   - END (16): 全图缩到中心点 决出胜者
+//
+// 关键参数：
+//   - 第 1 圈倒计时 PUBG_FIRST_AREA_REDUCE_TIME = 5 分钟
+//   - 单局无敌时间（防伞兵）PUBG_PHASE_INV_TIME = 3 分钟
+//   - 玩家攻击 PUBG_ATK + 血量 PUBG_HP（独立于原版面板）
+//   - 弓箭伤害倍率 PUBG_BOW_ATTACK_ATK_RATIO = 2.0
+//   - 普通攻击距离 PUBG_NORMAL_ATTACK_DISTANCE = 3.0 米
+
 const (
-	PUBG_PHASE_WAIT  = -1
-	PUBG_PHASE_START = 0
-	PUBG_PHASE_II    = 2
-	PUBG_PHASE_END   = 16
+	PUBG_PHASE_WAIT  = -1 // 等待开始
+	PUBG_PHASE_START = 0  // 游戏开始（第1圈缩圈中）
+	PUBG_PHASE_II    = 2  // 第2圈以上缩圈
+	PUBG_PHASE_END   = 16 // 终局（中心点死斗）
 )
 
 const (
@@ -78,7 +99,17 @@ func NewPluginPubg() *PluginPubg {
 	return p
 }
 
-// OnEnable 插件启用生命周期
+// OnEnable 插件启用生命周期（注册 8 个事件监听 + 2 个全局 tick + 1 个 GM 命令控制器）
+//
+// 8 个事件覆盖玩法核心流程：
+//   - MarkMap: 拦截标点请求 改用 PUBG 区域标点
+//   - AvatarDieAnimationEnd: 死亡时广播淘汰消息（仅 PUBG 内）
+//   - GadgetInteract: 拾取物件 → 加攻击/恢复HP（PUBG 物件配置）
+//   - PostEnterScene: 玩家进 AI 世界 → 注入隐藏小图标的 Lua
+//   - EvtDoSkillSucc: 角色技能命中 → 转换为 PUBG 伤害判定
+//   - EvtBeingHit: 实体受击 → PUBG 内自定义伤害结算
+//   - EvtCreateGadget: 创建物件（弓箭子弹）→ 送物理引擎模拟
+//   - EvtBulletHit: 子弹命中（弓箭专用 物理引擎判定结果）
 func (p *PluginPubg) OnEnable() {
 	// 监听事件
 	p.ListenEvent(PluginEventIdMarkMap, PluginEventPriorityNormal, p.EventMarkMap)
@@ -172,7 +203,14 @@ func (p *PluginPubg) EventGadgetInteract(iEvent IPluginEvent) {
 	event.Cancel()
 }
 
-// EventPostEnterScene 进入场景后事件
+// EventPostEnterScene 玩家进入 AI 世界后注入 Lua bytecode
+//
+// 注入的 Lua（Lua 源代码注释里有）作用：
+//  1. 让客户端 GM 按钮可见（CS.UnityEngine.GameObject.Find("/Canvas/.../BtnGm").SetActive(true)）
+//  2. 隐藏多人世界小地图玩家位置标记 Layer3（吃鸡玩法不能让玩家直接看见对手位置）
+//
+// 走 PlayerLuaShellNotify 把魔改 Lua bytecode 发给客户端 远程在 XLua 解释器中执行
+// **慎用**：客户端 XLua 权限很大 能直接操作 UI 树 之前有人滥用此能力做坏事 详见 CLAUDE.md
 func (p *PluginPubg) EventPostEnterScene(iEvent IPluginEvent) {
 	event := iEvent.(*PluginEventPostEnterScene)
 	player := event.Player
@@ -302,7 +340,17 @@ func (p *PluginPubg) EventEvtBeingHit(iEvent IPluginEvent) {
 	p.CreateUserTimer(defPlayer.PlayerId, 10, p.UserTimerPubgDieExit, p.world.GetId())
 }
 
-// EvtCreateGadget 创建物件实体事件
+// EvtCreateGadget 创建物件事件 - 拦截弓箭子弹送物理引擎模拟
+//
+// 仅识别两种弓箭蓄力子弹：
+//   - Bullet_ArrowAiming: 普通弓箭蓄力
+//   - Bullet_Venti_ArrowAiming: 温迪专属（六命增伤）
+//
+// pitchAngle 转换：原神客户端的 X 欧拉角是 0~360 角度（俯仰）需要转成 -90~90 范围
+//   - 0~90: 仰角（上）→ -原值
+//   - 270~360: 俯角（下）→ 360-原值
+//
+// 提交给 PhysicsEngine 后 子弹按抛物线运动 在每个 tick 检测命中
 func (p *PluginPubg) EvtCreateGadget(iEvent IPluginEvent) {
 	event := iEvent.(*PluginEventEvtCreateGadget)
 	player := event.Player
@@ -370,7 +418,14 @@ func (p *PluginPubg) EvtBulletHit(iEvent IPluginEvent) {
 
 /************************************************** 全局定时器 **************************************************/
 
-// GlobalTickPubg pubg游戏定时器
+// GlobalTickPubg PUBG 主定时器（每秒执行一次）
+//
+// 处理：
+//  1. UpdateArea 更新缩圈进度 + 通知客户端
+//  2. 玩家在蓝区外 → 调 handleEvtBeingHit 扣 PUBG_HP_LOST 血量（毒区伤害）
+//  3. 检查存活玩家：
+//     · 1 人 → 吃鸡 大吉大利消息 + StopPubg
+//     · 0 人 → 直接停止
 func (p *PluginPubg) GlobalTickPubg() {
 	world := p.world
 	if world == nil {
@@ -404,7 +459,11 @@ func (p *PluginPubg) GlobalTickPubg() {
 	}
 }
 
-// GlobalTickMinuteChange 定时开启pubg游戏
+// GlobalTickMinuteChange 每分钟变更时检查是否到自动开局时间
+// 算法：每个 GS 分配不同 startMinute（按 GsId 取模） 每 60 分钟自动开 6 局
+// 例：GsId=1 → 0/10/20/30/40/50 分钟开局；GsId=2 → 仍然 6 个时间点但都是 10 分钟周期
+//
+// 这意味着如果配置 6 个 GS 实例 集群每 10 分钟有一局自动开始
 func (p *PluginPubg) GlobalTickMinuteChange() {
 	minute := time.Now().Minute()
 	roomNumber := GAME.GetGsId() - 1
@@ -486,7 +545,7 @@ func (p *PluginPubg) NewPubgCommandController() *CommandController {
 func (p *PluginPubg) PubgCommand(c *CommandContent) bool {
 	var mode string // 模式
 
-	return c.Dynamic("string", func(param any) bool {
+	return c.Must("string", func(param any) bool {
 		// 模式
 		mode = param.(string)
 		return true
@@ -509,7 +568,15 @@ func (p *PluginPubg) PubgCommand(c *CommandContent) bool {
 
 /************************************************** 插件功能 **************************************************/
 
-// StartPubg 开始pubg游戏
+// StartPubg 开始 PUBG 游戏（GM 命令 /pubg start 或 自动开局触发）
+//
+// 处理：
+//  1. 把所有 PUBG 物件按概率撒到地图（增攻/恢复HP 散点配置在 gdconf/game_data_config/ext/）
+//  2. phase = START 走 RefreshArea 生成第 1 圈安全区
+//  3. 重置每个玩家的 fightProp（清零原版属性 用 PUBG_HP/PUBG_ATK 标准化值）
+//  4. 关闭无敌/无限能量/无cd（保留无限体力 让玩家可全图跑动）
+//
+// 关键设计：所有玩家用统一 1000 HP + 100 ATK 玩法公平 不带原版养成数据进 PUBG
 func (p *PluginPubg) StartPubg() {
 	if p.IsStartPubg() {
 		return
@@ -614,7 +681,17 @@ func (p *PluginPubg) IsInBlueArea(pos *model.Vector) bool {
 	return distance2D < p.blueAreaRadius
 }
 
-// RefreshArea 刷新游戏区域
+// RefreshArea 推进游戏阶段 + 重新计算安全区/缩圈速度
+//
+// 阶段循环（phase % 3）：
+//   - START(0): 第一圈大蓝区（半径 2000） 等待玩家落地（3 分钟无敌时间）
+//   - phase%3==1: 生成新安全区（在当前蓝区内随机偏移 半径减半）+ 等 PUBG_PHASE_INV_TIME 倒计时
+//   - phase%3==2: 蓝区开始缩向新安全区（持续 PUBG_FIRST_AREA_REDUCE_TIME 或 PUBG_PHASE_INV_TIME）
+//   - phase%3==0: 缩圈完毕 蓝区与安全区重合 等待下次刷新
+//   - END(16): 安全区消失 全图变蓝区 决出胜者
+//
+// 通过 SyncMapMarkArea 把蓝区/安全区圆周转成 72 个标点（每 5 度一个）发给客户端显示
+// 客户端在小地图上看到的圆圈就是这些点连起来的
 func (p *PluginPubg) RefreshArea() {
 	info := ""
 	if p.phase == PUBG_PHASE_START {
@@ -710,6 +787,17 @@ func (p *PluginPubg) GetAlivePlayerList() []*model.Player {
 	return alivePlayerList
 }
 
+// PubgHit PUBG 击中处理（弓箭命中或近战命中都走这里）
+//
+// 处理：
+//  1. 攻击间隔保护：同一攻击者 500ms 内不能重复触发命中（PUBG_NORMAL_ATTACK_INTERVAL_TIME）
+//     防止客户端同一帧重复发命中包导致瞬秒
+//  2. 伤害计算：
+//     · 弓箭命中：dmg = ATK / 2.0（即弓箭伤害是攻击力的一半 调平攻击节奏）
+//     · 近战命中：dmg = ATK / 5.0（近战伤害更低 但攻击间隔短）
+//  3. 调 handleEvtBeingHit 走原版伤害结算流程（扣血）
+//  4. 构造 EvtBeingHitInfo + CombatInvocationsNotify 广播给场景内其他玩家
+//     让其他玩家客户端也看到命中特效（因为命中由服务端判定 不是客户端原生事件）
 func (p *PluginPubg) PubgHit(scene *Scene, defAvatarEntityId uint32, atkAvatarEntityId uint32, isBow bool) {
 	defEntity := scene.GetEntity(defAvatarEntityId)
 	if defEntity == nil {

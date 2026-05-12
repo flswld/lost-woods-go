@@ -1,3 +1,25 @@
+// 玩家属性 ID（PlayerProp 常量集）
+//
+// 这是项目最常用的常量文件之一 几乎所有玩家相关业务都依赖
+// 与原神官服 PB 协议的 PlayerProp 枚举一致 不能改 ID 值
+//
+// 三大类（按 ID 分段）：
+//   - 1xxx: 角色属性（EXP / BREAK_LEVEL / SATIATION_VAL / LEVEL）
+//   - 4xxx: 角色等级
+//   - 10xxx+: 玩家属性（最大类 包括冒险等级/原石/摩拉/树脂等核心属性）
+//
+// 写入：直接 player.PropMap[PROP_ID] = value
+// 读取：player.PropMap[PROP_ID]
+//
+// 关键属性（最常用）：
+//   - PLAYER_LEVEL=10013: 冒险等级
+//   - PLAYER_HCOIN=10015: 原石
+//   - PLAYER_SCOIN=10016: 摩拉
+//   - PLAYER_RESIN=10020: 树脂
+//   - PLAYER_WORLD_LEVEL=10019: 世界等级（影响怪物等级）
+//   - MAX_STAMINA=10010 / CUR_PERSIST_STAMINA=10011: 体力上限/当前
+//   - IS_FLYABLE=10006 / IS_TRANSFERABLE=10009: 飞行/传送开关
+
 package constant
 
 const (

@@ -1,9 +1,12 @@
+// 怪物协议
+
 syntax = "proto3";
 
 package proto;
 
 option go_package = "./;proto";
 
+// 怪物召唤标记通知(改变时通知，S->C)
 message MonsterSummonTagNotify {
     enum CmdId {
         option allow_alias = true;
@@ -13,6 +16,6 @@ message MonsterSummonTagNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    map<uint32, uint32> summon_tag_map = 1;
-    uint32 monster_entity_id = 8;
+    map<uint32, uint32> summon_tag_map = 1; // 召唤数据组(tag->count)
+    uint32 monster_entity_id = 8;           // 怪物实体ID
 }

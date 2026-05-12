@@ -14,8 +14,17 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
+// 玩家基础属性/暂停/功能开放状态相关
+//
+// 包含三类核心字段的读写：
+//   1. PropMap          —— 玩家属性表（等级/经验/原石/树脂/体力/世界等级 等运行时数值）
+//   2. OpenStateMap     —— 功能开放状态（系统功能解锁条件，如冒险等级、任务完成 等）
+//   3. Pause            —— 单机暂停状态（多人世界禁用）
+
 /************************************************** 接口请求 **************************************************/
 
+// PlayerSetPauseReq 设置玩家单机暂停状态
+// 多人世界禁止暂停（影响他人体验）
 func (g *Game) PlayerSetPauseReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.PlayerSetPauseReq)
 	// 处于多人游戏中禁止暂停
@@ -27,15 +36,27 @@ func (g *Game) PlayerSetPauseReq(player *model.Player, payloadMsg pb.Message) {
 	g.SendSucc(cmd.PlayerSetPauseRsp, player, &proto.PlayerSetPauseRsp{})
 }
 
+// SetPlayerPropReq 客户端主动设置玩家属性（仅特定属性允许客户端设置 如MpSetting等）
+// 注意：服务端没有对req.PropList做白名单过滤 客户端理论上可以改任意属性 这是反作弊薄弱点
 func (g *Game) SetPlayerPropReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.SetPlayerPropReq)
+	propList := make([]uint32, 0)
 	for _, propValue := range req.PropList {
-		logger.Debug("player set prop, key: %v, value: %v, uid: %v", propValue.Type, propValue.Val, player.PlayerId)
-		player.PropMap[propValue.Type] = uint32(propValue.Val)
+		logger.Debug("player set prop, key: %v, value: %v, uid: %v", propValue.Type, propValue.Value, player.PlayerId)
+		value := uint32(0)
+		ival, ok := propValue.Value.(*proto.PropValue_Ival)
+		if ok {
+			value = uint32(ival.Ival)
+		}
+		player.PropMap[propValue.Type] = value
+		propList = append(propList, propValue.Type)
 	}
+	g.SendMsg(cmd.PlayerPropNotify, player.PlayerId, player.ClientSeq, g.PacketPlayerPropNotify(player, propList...))
 	g.SendSucc(cmd.SetPlayerPropRsp, player, &proto.SetPlayerPropRsp{})
 }
 
+// SetOpenStateReq 客户端请求开启某项功能
+// 仅当 OpenStateData 配置中 AllowClientReq=true 时才允许客户端主动改 否则只能由服务端按条件触发
 func (g *Game) SetOpenStateReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.SetOpenStateReq)
 	logger.Debug("player set open state, key: %v, value: %v, uid: %v", req.Key, req.Value, player.PlayerId)
@@ -58,36 +79,51 @@ func (g *Game) SetOpenStateReq(player *model.Player, payloadMsg pb.Message) {
 
 /************************************************** 游戏功能 **************************************************/
 
-// HandlePlayerExpAdd 玩家冒险阅历增加处理
-func (g *Game) HandlePlayerExpAdd(userId uint32) {
+// AddPlayerExp 根据当前经验值滚动升级冒险等级
+// 内部循环消耗每级所需经验直到不够升级或达到最大等级 然后调用 SetPlayerLevelExp 落实
+func (g *Game) AddPlayerExp(userId uint32) {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {
 		logger.Error("player is nil, uid: %v", userId)
 		return
 	}
 	// 玩家升级
+	newLevel := player.PropMap[constant.PLAYER_PROP_PLAYER_LEVEL]
+	newExp := player.PropMap[constant.PLAYER_PROP_PLAYER_EXP]
 	for {
-		playerLevel := player.PropMap[constant.PLAYER_PROP_PLAYER_LEVEL]
 		// 读取玩家等级配置表
-		playerLevelConfig := gdconf.GetPlayerLevelDataByLevel(int32(playerLevel))
+		playerLevelConfig := gdconf.GetPlayerLevelDataByLevel(int32(newLevel))
 		if playerLevelConfig == nil {
 			// 获取不到代表已经到达最大等级
 			break
 		}
 		// 确保拥有下一级的配置表
-		if gdconf.GetPlayerLevelDataByLevel(int32(playerLevel+1)) == nil {
+		if gdconf.GetPlayerLevelDataByLevel(int32(newLevel+1)) == nil {
 			// 获取不到代表已经到达最大等级
 			break
 		}
 		// 玩家冒险阅历不足则跳出循环
-		if player.PropMap[constant.PLAYER_PROP_PLAYER_EXP] < uint32(playerLevelConfig.Exp) {
+		if newExp < uint32(playerLevelConfig.Exp) {
 			break
 		}
 		// 玩家增加冒险等阶
-		player.PropMap[constant.PLAYER_PROP_PLAYER_LEVEL]++
-		player.PropMap[constant.PLAYER_PROP_PLAYER_EXP] -= uint32(playerLevelConfig.Exp)
+		newLevel++
+		newExp -= uint32(playerLevelConfig.Exp)
 	}
-	// TODO 完善的世界等级机制
+	g.SetPlayerLevelExp(userId, newLevel, newExp)
+}
+
+// SetPlayerLevelExp 直接覆盖玩家冒险等级和经验值
+// 同步更新世界等级（按等级阶段映射）并触发功能开放检查（部分功能按等级解锁）
+func (g *Game) SetPlayerLevelExp(userId uint32, level uint32, exp uint32) {
+	player := USER_MANAGER.GetOnlineUser(userId)
+	if player == nil {
+		logger.Error("player is nil, uid: %v", userId)
+		return
+	}
+	player.PropMap[constant.PLAYER_PROP_PLAYER_LEVEL] = level
+	player.PropMap[constant.PLAYER_PROP_PLAYER_EXP] = exp
+	// TODO 完善的世界等级机制（官服还有手动调整、CD时间、限制等机制）
 	player.PropMap[constant.PLAYER_PROP_PLAYER_WORLD_LEVEL] = g.GetWorldLevelByPlayerLevel(player.PropMap[constant.PLAYER_PROP_PLAYER_LEVEL])
 	// 更新玩家属性
 	g.SendMsg(cmd.PlayerPropNotify, player.PlayerId, player.ClientSeq, g.PacketPlayerPropNotify(
@@ -99,6 +135,8 @@ func (g *Game) HandlePlayerExpAdd(userId uint32) {
 	g.TriggerOpenState(userId)
 }
 
+// GetWorldLevelByPlayerLevel 按玩家冒险等级映射出世界等级
+// 简化版：每5级提升一阶 上限为8（与官服基础映射一致 但官服还有降低世界等级机制未实现）
 func (g *Game) GetWorldLevelByPlayerLevel(playerLevel uint32) uint32 {
 	if playerLevel < 20 {
 		return 0
@@ -123,7 +161,9 @@ func (g *Game) GetWorldLevelByPlayerLevel(playerLevel uint32) uint32 {
 	}
 }
 
-// TriggerOpenState 触发功能开放状态
+// TriggerOpenState 遍历所有OpenState配置 检查未开放的项是否满足条件并开启
+// 在玩家登录、升级、完成任务等关键节点调用
+// 当前仅实现 PLAYER_LEVEL 和 QUEST 两种条件 OFFERING_LEVEL/CITY_REPUTATION_LEVEL/PARENT_QUEST 直接当作不满足
 func (g *Game) TriggerOpenState(userId uint32) {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {
@@ -132,9 +172,11 @@ func (g *Game) TriggerOpenState(userId uint32) {
 	}
 	updateOpenStateMap := make(map[uint32]uint32)
 	for _, openStateDataConfig := range gdconf.GetOpenStateDataMap() {
+		// 没有条件配置的项跳过（这类项靠SetOpenStateReq或登录时DefaultOpen批量开启）
 		if len(openStateDataConfig.OpenStateCondList) == 0 {
 			continue
 		}
+		// 已开放的项跳过
 		if player.OpenStateMap[uint32(openStateDataConfig.OpenStateId)] == 1 {
 			continue
 		}
@@ -142,6 +184,7 @@ func (g *Game) TriggerOpenState(userId uint32) {
 		for _, openStateCond := range openStateDataConfig.OpenStateCondList {
 			switch openStateCond.Type {
 			case constant.OPEN_STATE_COND_PLAYER_LEVEL:
+				// 冒险等级达标
 				if len(openStateCond.Param) != 1 {
 					finish = false
 					continue
@@ -151,6 +194,7 @@ func (g *Game) TriggerOpenState(userId uint32) {
 					continue
 				}
 			case constant.OPEN_STATE_COND_QUEST:
+				// 完成指定任务
 				if len(openStateCond.Param) != 1 {
 					finish = false
 					continue
@@ -166,12 +210,15 @@ func (g *Game) TriggerOpenState(userId uint32) {
 					continue
 				}
 			case constant.OPEN_STATE_COND_OFFERING_LEVEL:
+				// TODO 须弥精通/枫丹潜水/纳塔玛尔等地区机制等级条件 未实现
 				finish = false
 				continue
 			case constant.OPEN_STATE_COND_CITY_REPUTATION_LEVEL:
+				// TODO 城市声望等级条件 未实现
 				finish = false
 				continue
 			case constant.OPEN_STATE_COND_PARENT_QUEST:
+				// TODO 完成父任务（包含多个子任务的章节级任务）条件 未实现
 				finish = false
 				continue
 			}
@@ -187,7 +234,8 @@ func (g *Game) TriggerOpenState(userId uint32) {
 	})
 }
 
-// ChangePlayerOpenState 修改功能开放状态
+// ChangePlayerOpenState 直接修改单项功能开放状态（不走条件检查）
+// 由GM命令、任务执行的SET_OPEN_STATE动作、SetOpenStateReq客户端请求 调用
 func (g *Game) ChangePlayerOpenState(userId uint32, key uint32, value uint32) {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {
@@ -200,6 +248,7 @@ func (g *Game) ChangePlayerOpenState(userId uint32, key uint32, value uint32) {
 	})
 }
 
+// AddPlayerNameCard 解锁玩家名片（不会自动设为当前使用 仅加入NameCardList）
 func (g *Game) AddPlayerNameCard(userId uint32, nameCardId uint32) {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {
@@ -212,6 +261,8 @@ func (g *Game) AddPlayerNameCard(userId uint32, nameCardId uint32) {
 
 /************************************************** 打包封装 **************************************************/
 
+// PacketPlayerDataNotify 构造PlayerDataNotify 发送玩家基础数据（昵称/属性/区服/服务器时间）
+// LoginNotify 中作为第一个通知下发 客户端必须收到才能展示玩家信息
 func (g *Game) PacketPlayerDataNotify(player *model.Player) *proto.PlayerDataNotify {
 	ntf := &proto.PlayerDataNotify{
 		NickName:          player.NickName,
@@ -226,6 +277,8 @@ func (g *Game) PacketPlayerDataNotify(player *model.Player) *proto.PlayerDataNot
 	return ntf
 }
 
+// PacketPlayerPropNotify 构造PlayerPropNotify 增量推送玩家属性变更
+// 不传propList时全量发送 传propList时仅发送指定key（推荐 减少网络开销）
 func (g *Game) PacketPlayerPropNotify(player *model.Player, propList ...uint32) *proto.PlayerPropNotify {
 	ntf := &proto.PlayerPropNotify{
 		PropMap: make(map[uint32]*proto.PropValue),
@@ -243,6 +296,8 @@ func (g *Game) PacketPlayerPropNotify(player *model.Player, propList ...uint32) 
 	return ntf
 }
 
+// PacketOpenStateUpdateNotify 构造OpenStateUpdateNotify 全量同步功能开放状态
+// 登录时下发一次 后续增量改动用 OpenStateChangeNotify
 func (g *Game) PacketOpenStateUpdateNotify(player *model.Player) *proto.OpenStateUpdateNotify {
 	ntf := &proto.OpenStateUpdateNotify{
 		OpenStateMap: player.OpenStateMap,

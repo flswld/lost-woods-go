@@ -5,13 +5,23 @@ import (
 	"strconv"
 )
 
+// dispatch SDK 账号 ID 自增计数器（Redis 模式）
+//
+// 集群模式下用 Redis INCR 原子自增 避免多 dispatch 实例并发分配同一 ID
+// standalone 模式不走这里 直接用 SdkGorm 表的 NextSdkAccountId 字段
+//
+// SdkAccountIdBegin=10000 起始账号 ID（避免与 0~9999 的预留 ID 冲突）
+
 const RedisPlayerKeyPrefix = "HK4E"
 
 const (
-	SdkAccountIdRedisKey        = "SdkAccountId"
-	SdkAccountIdBegin    uint32 = 10000
+	SdkAccountIdRedisKey        = "SdkAccountId" // Redis Key 后缀
+	SdkAccountIdBegin    uint32 = 10000          // 起始账号 ID
 )
 
+// GetNextSdkAccountId 分配下一个 SDK 账号 ID（apiLogin 注册新账号时调用）
+// 利用 Redis INCR 原子自增 集群环境下安全
+// 首次调用时若 Key 不存在 自动初始化为 SdkAccountIdBegin=10000
 func (d *Dao) GetNextSdkAccountId() (uint32, error) {
 	return d.redisInc(RedisPlayerKeyPrefix + ":" + SdkAccountIdRedisKey)
 }

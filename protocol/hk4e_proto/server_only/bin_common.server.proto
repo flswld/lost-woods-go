@@ -1,3 +1,5 @@
+// bin.server.proto、redis_data.proto和服务器内部通信的公用存储结构
+
 syntax = "proto3";
 
 package proto;
@@ -45,6 +47,7 @@ enum OfflineOpType {
     OFFLINE_OP_GCG_SETTLE = 7;
 }
 
+// 向量
 message VectorBin {
     float x = 1;
     float y = 2;
@@ -66,6 +69,7 @@ message FloatPairBin {
     float second = 2;
 }
 
+// 用于嵌套的repeated
 message Uint32List {
     repeated uint32 uint32_list = 1;
 }
@@ -88,6 +92,7 @@ message WeaponBin {
     map<uint32, uint32> affix_map = 4;
 }
 
+// 包括Weapon和Reliquary,需要额外的参数控制
 message ItemParamBin {
     uint32 item_id = 1;
     uint32 count = 2;
@@ -95,88 +100,102 @@ message ItemParamBin {
     uint32 promote_level = 4;
 }
 
+// 邮件数据
 message MailBin {
-    string title = 1;
-    string content = 2;
-    string sender = 3;
-    repeated ItemParamBin item_param_list = 4;
-    fixed32 send_time = 5;
-    fixed32 expire_time = 6;
-    uint32 importance = 7;
-    uint32 config_id = 8;
-    repeated string argument_list = 9;
-    uint32 item_limit_type = 10;
-    uint32 source_type = 11;
+    string title = 1;                          // 标题
+    string content = 2;                        // 内容
+    string sender = 3;                         // 发件人
+    repeated ItemParamBin item_param_list = 4; // 附件道具列表
+    fixed32 send_time = 5;                     // 发送时间
+    fixed32 expire_time = 6;                   // 过期时间
+    uint32 importance = 7;                     // 是否重要
+    uint32 config_id = 8;                      // 非0表示要用Excel配置的邮件内容
+    repeated string argument_list = 9;         // Excel配置的邮件内容用的参数
+    uint32 item_limit_type = 10;               // 产出来源
+    uint32 source_type = 11;                   // 邮件来源
     string tag = 12;
     uint32 reason_type = 13;
     uint32 collect_state = 14;
 }
 
+// 运营删除道具操作
 message DelItemOp {
     uint32 item_id = 1;
     uint32 item_num = 2;
 }
 
+// 运营删除道具操作,扣到负数
 message DelItemNegativeOp {
     uint32 item_id = 1;
-    uint32 item_num = 2;
-    uint32 remain_num = 3;
+    uint32 item_num = 2;   // 运营配置的扣除数量
+    uint32 remain_num = 3; // 还需要扣除数量
 }
 
+// 删除武器圣遗物
 message DelEquipOp {
     uint64 guid = 1;
 }
 
+// 强制设置玩家坐标
 message PlayerGotoOp {
     uint32 scene_id = 1;
     VectorBin pos = 2;
 }
 
+// 重置父任务
 message ResetParentQuestOp {
     uint32 parent_quest_id = 3;
 }
 
+// 强制刷新大世界group
 message RefreshGroupOp {
     uint32 group_id = 1;
     uint32 suite_id = 2;
     uint32 scene_id = 3;
 }
 
+// 设置场景点位解锁状态
 message SetScenePointLockStatusOp {
     uint32 scene_id = 1;
     uint32 point_id = 2;
     bool is_locked = 3;
 }
 
+// 设置玩家昵称
 message SetPlayerNickNameOp {
     string nick_name = 1;
 }
 
+// 刷新商店
 message RefreshShopOp {
 }
 
+// 解锁玩家天赋
 message UnlockTalentOp {
-    uint32 avatar_id = 1;
-    uint32 skill_depot_id = 2;
-    uint32 talent_id = 3;
+    uint32 avatar_id = 1;      // 角色配置ID
+    uint32 skill_depot_id = 2; // 技能库ID
+    uint32 talent_id = 3;      // 天赋id
 }
 
+// 卸下装备
 message TakeOffEquipOp {
-    uint32 avatar_id = 1;
-    uint32 equip_type = 2;
+    uint32 avatar_id = 1;  // 角色配置ID
+    uint32 equip_type = 2; // 装备类型
 }
 
+// 删除邮件
 message DelMailOp {
-    repeated uint32 mail_id_list = 1;
+    repeated uint32 mail_id_list = 1; // 邮件ID
 }
 
+// 解锁区域
 message UnlockAreaOp {
-    uint32 area_id = 1;
+    uint32 area_id = 1; // 区域id
 }
 
 message FinishDailyTaskOp {
     uint32 daily_task_id = 1;
-    uint32 daily_time = 2;
+    uint32 daily_time = 2; // 只完成今天的固定事件
 }
 
 message AddItemOp {
@@ -188,23 +207,26 @@ message AddItemOp {
     }
 }
 
+// 修改玩家下次登入时的出生点，一般用于玩家登入loading卡住了
 message ModifyBornPosOp {
     uint32 scene_id = 1;
     VectorBin pos = 2;
 }
 
+// 扣除货币到负数（莫拉原石）
 message SubCoinNegativeOp {
-    uint32 scoin = 1;
-    uint32 hcoin = 2;
+    uint32 scoin = 1; // 摩拉 202
+    uint32 hcoin = 2; // 原石 201 等价于RMB
     uint32 mcoin = 3;
     uint32 home_coin = 4;
     PlatformType platform_type = 5;
 }
 
+// 设置任务进度
 message SetQuestContentProgressOp {
     uint32 quest_id = 1;
-    map<uint32, uint32> finish_progress_map = 2;
-    map<uint32, uint32> fail_progress_map = 3;
+    map<uint32, uint32> finish_progress_map = 2; // idx -> value 映射 完成任务进度
+    map<uint32, uint32> fail_progress_map = 3;   // 失败进度
 }
 
 message FinishOrderOp {
@@ -553,9 +575,9 @@ message BanPlayerGCGPVPOp {
 }
 
 message OfflineMsgBin {
-    fixed32 enque_time = 1;
-    string ticket = 2;
-    uint32 index = 3;
+    fixed32 enque_time = 1;                                           // 进入队列时间
+    string ticket = 2;                                                // 运营指定的ticket
+    uint32 index = 3;                                                 // 编号
     oneof detail {
         DelItemOp del_item_op = 4;
         PlayerGotoOp goto_op = 5;
@@ -569,12 +591,12 @@ message OfflineMsgBin {
         DelMailOp del_mail_op = 13;
         FinishDailyTaskOp finish_daily_task_op = 14;
         UnlockAreaOp unlock_area_op = 15;
-        DelItemNegativeOp del_item_negative_op = 16;
-        DelEquipOp del_equip_op = 17;
+        DelItemNegativeOp del_item_negative_op = 16;                  // 扣除物品，扣到负数(只支持普通材料)
+        DelEquipOp del_equip_op = 17;                                 // 扣除武器圣遗物
         AddItemOp add_item_op = 18;
-        ModifyBornPosOp modify_born_pos_op = 19;
-        SubCoinNegativeOp sub_coin_negative_op = 20;
-        SetQuestContentProgressOp set_quest_content_progress_op = 21;
+        ModifyBornPosOp modify_born_pos_op = 19;                      // 修改玩家出生点
+        SubCoinNegativeOp sub_coin_negative_op = 20;                  // 扣除货币到负数（莫拉原石）
+        SetQuestContentProgressOp set_quest_content_progress_op = 21; // 设置玩家任务进度
         FinishOrderOp finish_order_op = 22;
         AddOrModifyWatcherOp add_or_modify_watcher_op = 23;
         DelWatcherOp del_watcher_op = 24;

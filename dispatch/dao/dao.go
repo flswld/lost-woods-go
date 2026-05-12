@@ -21,6 +21,16 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 )
 
+// dispatch 数据访问层（数据库名 dispatch_hk4e）
+//
+// 表：
+//   - SdkGorm: SDK 全局信息（仅 1 行 主要存 nextSdkAccountId 自增计数）
+//   - SdkAccountGorm: SDK 账号表（账号-密码-token 等）
+//
+// 与 gate 的 AccountGorm 是不同的表：
+//   - dispatch SdkAccount：账号-密码 + ComboToken（玩家在客户端输入的）
+//   - gate Account：OpenId（=SdkAccount.AccountId 字符串）↔ Uid 映射
+
 type Dao struct {
 	mongo        *mongo.Client
 	mongoDb      *mongo.Database

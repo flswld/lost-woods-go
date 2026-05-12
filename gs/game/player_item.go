@@ -14,9 +14,38 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
+// 背包物品 模块
+//
+// 物品分两大类：
+//   - 实体物品（普通材料/食物/任务道具）：存在 dbItem.itemMap 里 有 ChangeCount 数量
+//   - 虚拟物品（原石/摩拉/经验/树脂）：存 PropMap 不创建 Item 对象 通过 VIRTUAL_ITEM_PROP 映射
+//
+// 使用入口：
+//   - UseItemReq: 客户端使用物品请求（背包里点"使用"）
+//   - UseItem: 内部 API（任务奖励/邮件领取等都走这个）
+//
+// 已实现的 ItemUseOption（共 8 种）：
+//   - GAIN_AVATAR: 角色试用券 → 解锁角色（已拥有则给命之座道具）
+//   - RELIVE_AVATAR: 复活材料 → 复活指定角色
+//   - ADD_SERVER_BUFF: 服务端 buff（"草泥马回血要走ability" 注释暴露 ability 系统未实现）
+//   - GAIN_FLYCLOAK: 风之翼
+//   - GAIN_NAME_CARD: 名片
+//   - GAIN_COSTUME: 衣装/时装
+//   - ADD_ELEM_ENERGY: 加元素能量（同元素全量 异元素半量 后排 60%）
+//   - ADD_ALL_ENERGY: 全队加能量
+//
+// AddPlayerItem/CostPlayerItem 是物品增减的统一入口 涉及 PropMap 修改 + 通知客户端
+
 /************************************************** 接口请求 **************************************************/
 
-// UseItemReq 使用物品请求
+// UseItemReq 使用物品请求（背包→使用）
+//
+// 处理：
+//  1. 校验玩家有这个物品
+//  2. 一次性扣 req.Count 个物品
+//  3. 循环调 UseItem 每次使用一个（按物品 ItemUseList 配置触发对应效果）
+//
+// targetGuid 仅复活材料/弓箭专用券等需要选择目标的物品才用
 func (g *Game) UseItemReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.UseItemReq)
 	// 是否拥有物品
@@ -49,6 +78,15 @@ func (g *Game) UseItemReq(player *model.Player, payloadMsg pb.Message) {
 
 /************************************************** 游戏功能 **************************************************/
 
+// UseItem 使用物品（核心实现 按 ItemUseList 配置分支处理 8 种 UseOption）
+//
+// 同一物品可能有多个 ItemUse（如食物可能同时回血+加buff）
+// EndlessLoopCheck 防止递归（用了 A 物品给 B 物品 → B 又触发 A 等情况）
+//
+// **特殊**：行 94 注释 "草泥马回血要走ability" 暴露问题——
+//
+//	食物回血在原版通过 ability buff 实现 但项目 ability 系统不完整 → 食物无法回血
+//	作者用粗口注释表达对这个限制的不满
 func (g *Game) UseItem(userId uint32, itemId uint32, targetParam ...uint64) {
 	g.EndlessLoopCheck(EndlessLoopCheckTypeUseItem)
 	player := USER_MANAGER.GetOnlineUser(userId)
@@ -189,7 +227,8 @@ func (g *Game) GetAllItemDataConfig() map[int32]*gdconf.ItemData {
 	return allItemDataConfig
 }
 
-// GetPlayerItemCount 获取玩家所持有的某个物品的数量
+// GetPlayerItemCount 获取玩家某物品数量（虚拟物品走 PropMap 实体物品走 dbItem.itemMap）
+// 虚拟物品如：原石(itemId=201)→PROP_PLAYER_HCOIN, 摩拉(202)→PROP_PLAYER_SCOIN, 树脂(106)→PROP_PLAYER_RESIN
 func (g *Game) GetPlayerItemCount(userId uint32, itemId uint32) uint32 {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {
@@ -212,7 +251,19 @@ type ChangeItem struct {
 	ChangeCount uint32
 }
 
-// AddPlayerItem 添加玩家物品
+// AddPlayerItem 添加玩家物品（最常用的物品入口 任务奖励/秘境/邮件/掉落都走这里）
+//
+// 处理：
+//  1. 合并 itemList 中相同 itemId（如同时给 100+200 摩拉 合并成 300）
+//  2. 按 ItemType 分支：
+//     · WEAPON: 调 AddPlayerWeapon 创建武器（每件单独 GUID）
+//     · RELIQUARY: 调 AddPlayerReliquary 创建圣遗物（每件单独 GUID）
+//     · VIRTUAL: 走 PropMap +=（如原石/摩拉直接加属性）
+//     · MATERIAL/FURNITURE: 走 dbItem.AddItem 计数+1（同 itemId 共享一个 GUID）
+//  3. AutoUse=1 的物品（如战令经验书）→ 自动调 UseItem 立即使用
+//  4. 触发 QUEST_FINISH_COND_TYPE_OBTAIN_ITEM 任务推进（如"获得 5 个甜甜花"任务）
+//  5. 特殊物品：玩家经验 → AddPlayerExp 升冒险等级；角色经验 → 给当前出战角色加经验
+//  6. 通知客户端：StoreItemChangeNotify（背包变化）+ ItemAddHintNotify（屏幕飘字提示）
 func (g *Game) AddPlayerItem(userId uint32, itemList []*ChangeItem, hintReason proto.ActionReasonType) bool {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {
@@ -251,7 +302,7 @@ func (g *Game) AddPlayerItem(userId uint32, itemList []*ChangeItem, hintReason p
 		case constant.ITEM_TYPE_WEAPON:
 			g.AddPlayerWeapon(player.PlayerId, itemId)
 		case constant.ITEM_TYPE_RELIQUARY:
-			g.AddPlayerReliquary(player.PlayerId, itemId)
+			g.AddPlayerReliquary(player.PlayerId, itemId, 0, nil)
 		case constant.ITEM_TYPE_VIRTUAL, constant.ITEM_TYPE_MATERIAL, constant.ITEM_TYPE_FURNITURE:
 			prop, exist := constant.VIRTUAL_ITEM_PROP[itemId]
 			if exist {
@@ -290,7 +341,7 @@ func (g *Game) AddPlayerItem(userId uint32, itemList []*ChangeItem, hintReason p
 		}
 	}
 	for itemId, addCount := range itemMap {
-		g.TriggerQuest(player, constant.QUEST_FINISH_COND_TYPE_OBTAIN_ITEM, "", int32(itemId))
+		g.TriggerQuest(player, constant.QUEST_FINISH_COND_TYPE_OBTAIN_ITEM, "", int32(itemId), int32(addCount))
 		itemDataConfig := gdconf.GetItemDataById(int32(itemId))
 		if itemDataConfig == nil {
 			continue
@@ -304,21 +355,29 @@ func (g *Game) AddPlayerItem(userId uint32, itemList []*ChangeItem, hintReason p
 		switch itemId {
 		case constant.ITEM_ID_PLAYER_EXP:
 			// 冒险阅历
-			g.HandlePlayerExpAdd(userId)
+			g.AddPlayerExp(userId)
 		case constant.ITEM_ID_AVATAR_EXP:
 			// 角色经验
 			world := WORLD_MANAGER.GetWorldById(player.WorldId)
 			if world != nil {
 				activeAvatarId := world.GetPlayerActiveAvatarId(player)
-				dbAvatar := player.GetDbAvatar()
-				g.UpgradePlayerAvatar(player, dbAvatar.GetAvatarById(activeAvatarId), addCount)
+				g.AddPlayerAvatarExp(player.PlayerId, activeAvatarId, addCount)
 			}
 		}
 	}
 	return true
 }
 
-// CostPlayerItem 消耗玩家物品
+// CostPlayerItem 消耗玩家物品（统一物品扣减入口）
+//
+// 处理：
+//  1. 检查所有物品数量足够（不足返回 false 不扣任何物品）
+//  2. 数量足够时执行扣减：
+//     · 虚拟物品：PropMap -=
+//     · 实体物品：dbItem.CostItem 扣计数 数量为 0 时移除
+//  3. 通知客户端：PlayerPropNotify（虚拟物品变化）+ StoreItemChangeNotify（实体物品变化）+ StoreItemDelNotify（数量为 0 的物品）
+//
+// 与 AddPlayerItem 配套使用 升级/突破/合成的"扣材料"都走这里
 func (g *Game) CostPlayerItem(userId uint32, itemList []*ChangeItem) bool {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {

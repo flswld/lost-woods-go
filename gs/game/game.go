@@ -21,14 +21,27 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
+// 游戏服务器主结构与单线程主循环
+//
+// 设计核心约束：
+//   1. 整个GS只有一个主循环goroutine（gameMainLoop），所有玩家逻辑串行执行
+//   2. 玩家数据访问无需加锁（直接字段读写），但任何阻塞操作都会卡死整个GS
+//   3. DB IO 必须放到后台 goroutine（asyncWriteDbChan/saveUserChan），完成后通过
+//      LOCAL_EVENT_MANAGER 回调主循环
+//   4. 主循环 panic 会被 defer recover 捕获 踢掉SELF玩家后重启循环
+//      （10秒内连续panic>10次才会退出进程）
+
 const (
-	PlayerBaseUid    = 100000000
-	MaxPlayerBaseUid = 200000000
-	AiBaseUid        = 10000
-	AiName           = "小可爱"
-	AiSign           = "快捷指令"
+	PlayerBaseUid    = 100000000 // 玩家uid下限 < 此值视为非玩家（AI/系统）
+	MaxPlayerBaseUid = 200000000 // 玩家uid上限
+	AiBaseUid        = 10000     // AI玩家uid基准 实际AI uid = AiBaseUid + gsId（每GS一个）
+	AiName           = "小可爱"     // AI玩家昵称（GM机器人好友）
+	AiSign           = "快捷指令"    // AI玩家签名前缀
 )
 
+// 全局单例管理器 在 NewGameCore 中按顺序初始化
+// 顺序敏感：LOCAL_EVENT → ROUTE → USER → WORLD → TICK → COMMAND → GCG → PLUGIN
+// 因为后初始化的模块可能依赖前面的模块（PLUGIN最后才InitPlugin）
 var GAME *Game = nil
 var LOCAL_EVENT_MANAGER *LocalEventManager = nil
 var ROUTE_MANAGER *RouteManager = nil
@@ -41,23 +54,29 @@ var PLUGIN_MANAGER *PluginManager = nil
 
 var ONLINE_PLAYER_NUM int32 = 0 // 当前在线玩家数
 
+// SELF 当前主循环正在处理的玩家 用于handler内部传递上下文避免每个调用层层传player参数
+// 由 ROUTE_MANAGER.doRoute 在调用handler前后置换 OnLogin 内部也临时设置
+// 警告：单线程模式下才安全 绝不能持有到异步goroutine中（会被下一个请求覆盖）
 var SELF *model.Player
 
 type Game struct {
 	discoveryClient    *rpc.DiscoveryClient // node节点服务器的natsrpc客户端
 	db                 *dao.Dao             // 数据访问对象
-	messageQueue       *mq.MessageQueue
-	gsId               uint32               // 游戏服务器编号
+	messageQueue       *mq.MessageQueue     // 消息队列（NATS+TCP双通道）
+	gsId               uint32               // 游戏服务器编号 由Node注册时分配
 	gsAppid            string               // 游戏服务器appid
 	gsAppVersion       string               // 游戏服务器版本
-	snowflake          *alg.SnowflakeWorker // 雪花唯一id生成器
-	isStop             bool                 // 停服标志
-	dispatchCancel     bool                 // 取消调度标志
-	endlessLoopCounter map[int]uint64       // 死循环保护计数器
-	transactionSeq     uint32               // 事务序列号
-	ai                 *model.Player        // 本服的Ai玩家对象
+	snowflake          *alg.SnowflakeWorker // 雪花唯一id生成器（worldId/weaponId/reliquaryId 等用）
+	isStop             bool                 // 停服标志 Close后置位
+	dispatchCancel     bool                 // 取消调度标志 同版本服务器更新切换时置位
+	endlessLoopCounter map[int]uint64       // 死循环保护计数器（按checkType计数 阈值见EndlessLoopCheck）
+	transactionSeq     uint32               // 事务序列号 用于NewTransaction生成唯一事务ID
+	ai                 *model.Player        // 本服的AI玩家对象（"小可爱" GM机器人好友 + AI世界owner）
 }
 
+// NewGameCore 创建Game主对象并启动主循环
+// 调用顺序：app.go 完成基础设施（DAO/MQ/RPC）后调用此函数 之后阻塞直到收到信号
+// 内部按依赖顺序初始化全局单例 然后创建AI玩家+AI世界 最后初始化插件并启动主循环goroutine
 func NewGameCore(discoveryClient *rpc.DiscoveryClient, db *dao.Dao, messageQueue *mq.MessageQueue, gsId uint32, gsAppid string, gsAppVersion string) (r *Game) {
 	r = new(Game)
 	r.discoveryClient = discoveryClient
@@ -94,6 +113,8 @@ func NewGameCore(discoveryClient *rpc.DiscoveryClient, db *dao.Dao, messageQueue
 	return r
 }
 
+// gameMainLoopD 主循环监控守护
+// 包裹 gameMainLoop 在panic后自动重启 但10秒内连续panic>10次会判定为不可恢复 进程退出
 func (g *Game) gameMainLoopD() {
 	times := 1
 	panicCounter := 0
@@ -118,6 +139,15 @@ func (g *Game) gameMainLoopD() {
 	}
 }
 
+// gameMainLoop 单线程主循环 整个GS的命脉
+// select多路复用4个通道（按优先级近似公平 Go runtime 随机选择）：
+//  1. netMsg     —— 客户端消息（路由分发到handler）
+//  2. globalTick —— 50ms定时帧（驱动玩家移动同步、tick回调、PUBG物理引擎等）
+//  3. localEvent —— 异步IO完成回调（DB加载/保存完成、热更配置完成 等）
+//  4. command    —— GM命令（聊天命令/RPC调用）
+//
+// 每分钟打印一次CPU时间分布日志 用于排查热点
+// runtime.LockOSThread 把goroutine绑定到OS线程 减少调度抖动
 func (g *Game) gameMainLoop() {
 	// panic捕获
 	defer func() {
@@ -227,14 +257,21 @@ func (g *Game) GetAi() *model.Player {
 	return g.ai
 }
 
+// CreateRobot 创建机器人玩家（uid < PlayerBaseUid）
+// 用于：
+//   - GS启动时创建本服AI玩家"小可爱"（GM机器人好友 + AI世界owner）
+//   - GM命令 CreateRobotInAiWorld 在AI世界中创建陪玩机器人（当前无AI行为 仅占位）
+//
+// 模拟完整的登录-出生-进场景流程 末尾设置WuDi避免被误杀
 func (g *Game) CreateRobot(uid uint32, name string, sign string) *model.Player {
 	g.OnLogin(uid, 0, "", nil, new(proto.PlayerLoginReq), true)
 	robot := USER_MANAGER.GetOnlineUser(uid)
-	robot.DbState = model.DbNormal
+	robot.DbState = model.DbNormal // 机器人不写库 直接置为Normal跳过Insert
 	g.SetPlayerBornDataReq(robot, &proto.SetPlayerBornDataReq{AvatarId: 10000007, NickName: name})
 	robot.Signature = sign
 	world := WORLD_MANAGER.GetWorldById(robot.WorldId)
-	g.HostEnterMpWorld(robot)
+	g.HostEnterMpWorld(robot) // 转为多人世界（让其他玩家可以加入）
+	// 直接调用四步状态机的handler 模拟客户端依次发送
 	g.EnterSceneReadyReq(robot, &proto.EnterSceneReadyReq{
 		EnterSceneToken: world.GetEnterSceneToken(),
 	})
@@ -251,16 +288,21 @@ func (g *Game) CreateRobot(uid uint32, name string, sign string) *model.Player {
 	return robot
 }
 
+// EndlessLoopCheck 死循环保护 主循环单线程模式下卡死会影响所有玩家所以必须熔断
+// 各类型阈值不同：TriggerQuest最大10000（任务触发递归较深） 其他默认1000
+// 触发后踢掉SELF玩家并 panic 由 gameMainLoopD 重启循环
 const (
-	EndlessLoopCheckTypeAcceptQuest = iota
-	EndlessLoopCheckTypeStartQuest
-	EndlessLoopCheckTypeExecQuest
-	EndlessLoopCheckTypeTriggerQuest
-	EndlessLoopCheckTypeUseItem
-	EndlessLoopCheckTypeCallLuaFunc
-	EndlessLoopCheckTypeCheckFinishedCond
+	EndlessLoopCheckTypeAcceptQuest       = iota // 接受任务
+	EndlessLoopCheckTypeStartQuest               // 开始任务
+	EndlessLoopCheckTypeExecQuest                // 执行任务动作
+	EndlessLoopCheckTypeTriggerQuest             // 推进任务进度（递归层数最深 阈值最大）
+	EndlessLoopCheckTypeUseItem                  // 使用道具
+	EndlessLoopCheckTypeCallLuaFunc              // 调用Lua函数
+	EndlessLoopCheckTypeCheckFinishedCond        // 检查任务完成条件
 )
 
+// EndlessLoopCheck 在容易递归的入口处调用 累计计数 超过阈值则panic
+// 计数器在主循环每次select都会清零（见gameMainLoop开头）所以仅检测单次主循环步内的递归深度
 func (g *Game) EndlessLoopCheck(checkType int) {
 	g.endlessLoopCounter[checkType]++
 	checkCount := g.endlessLoopCounter[checkType]
@@ -308,13 +350,19 @@ func (g *Game) EndlessLoopCheck(checkType int) {
 	}
 }
 
+// NewTransaction 生成事务唯一ID 格式 "uid-时间戳-序列号"
+// 用于客户端响应中的Transaction字段（GetAllMailResultNotify等）
 func (g *Game) NewTransaction(uid uint32) string {
 	g.transactionSeq++
 	return strconv.Itoa(int(uid)) + "-" + strconv.Itoa(int(time.Now().Unix())) + "-" + strconv.Itoa(int(g.transactionSeq))
 }
 
+// EXIT_SAVE_FIN_CHAN 停服时主循环阻塞等待此channel 用于等异步保存全部完成
 var EXIT_SAVE_FIN_CHAN chan bool
 
+// ServerStopNotify 停服流程入口（GM命令ServerStop或node通知）
+// 异步执行：先全服公告"停服维护" → 等待1分钟让玩家退出 → 按 GsId 错峰再等几秒 → Close
+// 错峰是为了多GS同时停服时不会同时压垮DB
 func (g *Game) ServerStopNotify() {
 	go func() {
 		info := "停服维护"
@@ -328,6 +376,9 @@ func (g *Game) ServerStopNotify() {
 	}()
 }
 
+// Close 实际停服流程 同步阻塞直到所有玩家档保存完成
+// 步骤：1. 投递ExitRunUserCopyAndSave事件并等保存完成 2. 踢掉所有玩家+广播下线 3. 卸载插件
+// 主循环会在 ExitRunUserCopyAndSave 处理完后永久阻塞（select{}）等进程退出
 func (g *Game) Close() {
 	if g.isStop {
 		return
@@ -360,6 +411,8 @@ func (g *Game) Close() {
 	logger.Warn("stop game server finish")
 }
 
+// ServerDispatchCancelNotify 收到调度取消通知（同版本服务器更新前用 让Dispatch不再分配新玩家到本服）
+// 仅当通知中的版本号匹配本服才生效（避免误伤）
 func (g *Game) ServerDispatchCancelNotify(appVersion string) {
 	if appVersion != g.gsAppVersion {
 		return
@@ -369,6 +422,7 @@ func (g *Game) ServerDispatchCancelNotify(appVersion string) {
 }
 
 // SendMsgToGate 发送消息给客户端 指定网关
+// 用于玩家不在本服内存（OnLogin失败时只能用userId+gateAppId定位）的场景
 func (g *Game) SendMsgToGate(cmdId uint16, userId uint32, clientSeq uint32, gateAppId string, payloadMsg pb.Message) {
 	if userId < PlayerBaseUid {
 		return
@@ -396,7 +450,8 @@ func (g *Game) SendMsgToGate(cmdId uint16, userId uint32, clientSeq uint32, gate
 	})
 }
 
-// SendMsg 发送消息给客户端
+// SendMsg 发送消息给指定玩家 是handler最常用的下行接口
+// 自动从在线表查到玩家所在Gate appid 序列化proto后通过mq转发
 func (g *Game) SendMsg(cmdId uint16, userId uint32, clientSeq uint32, payloadMsg pb.Message) {
 	if userId < PlayerBaseUid {
 		return
@@ -434,7 +489,8 @@ func (g *Game) SendMsg(cmdId uint16, userId uint32, clientSeq uint32, payloadMsg
 	})
 }
 
-// SendError 通用返回错误码
+// SendError 通用错误响应 通过反射设置 rsp.Retcode 字段后发送
+// 不传retCode默认 RET_SVR_ERROR 业务handler通常显式传具体错误码
 func (g *Game) SendError(cmdId uint16, player *model.Player, rsp pb.Message, retCode ...proto.Retcode) {
 	if rsp == nil {
 		return
@@ -450,7 +506,7 @@ func (g *Game) SendError(cmdId uint16, player *model.Player, rsp pb.Message, ret
 	g.SendMsg(cmdId, player.PlayerId, player.ClientSeq, rsp)
 }
 
-// SendSucc 通用返回成功
+// SendSucc 通用成功响应 通过反射设置 rsp.Retcode = RET_SUCC 后发送
 func (g *Game) SendSucc(cmdId uint16, player *model.Player, rsp pb.Message) {
 	if rsp == nil {
 		return
@@ -462,7 +518,8 @@ func (g *Game) SendSucc(cmdId uint16, player *model.Player, rsp pb.Message) {
 	g.SendMsg(cmdId, player.PlayerId, player.ClientSeq, rsp)
 }
 
-// SendToWorldA 给世界内所有玩家发消息
+// SendToWorldA 广播给世界内所有玩家（aecUid参数指定要排除的uid 0表示不排除）
+// "A"表示All "aec"表示AllExceptCur 命名沿用 ForwardType 的语义
 func (g *Game) SendToWorldA(world *World, cmdId uint16, seq uint32, msg pb.Message, aecUid uint32) {
 	for _, v := range world.GetAllPlayer() {
 		if aecUid == v.PlayerId {
@@ -472,12 +529,15 @@ func (g *Game) SendToWorldA(world *World, cmdId uint16, seq uint32, msg pb.Messa
 	}
 }
 
-// SendToWorldH 给世界房主发消息
+// SendToWorldH 仅发送给世界房主 "H"表示Host
 func (g *Game) SendToWorldH(world *World, cmdId uint16, seq uint32, msg pb.Message) {
 	g.SendMsg(cmdId, world.GetOwner().PlayerId, seq, msg)
 }
 
-// SendToSceneA 给场景内所有玩家发消息
+// SendToSceneA 给场景内所有玩家广播 带视野/AOI过滤
+// 普通世界：按视野距离判定（IsInVision）超出视野不发
+// AI世界：用 aiWorldAoi 网格过滤 仅发给AOI范围内的玩家（PUBG等大规模玩法的优化）
+// 注意：依赖SELF作为"参考点"判断视野 SELF为nil时不做过滤直接全发
 func (g *Game) SendToSceneA(scene *Scene, cmdId uint16, seq uint32, msg pb.Message, aecUid uint32) {
 	world := scene.GetWorld()
 	if WORLD_MANAGER.IsAiWorld(world) && SELF != nil {
@@ -507,7 +567,8 @@ func (g *Game) SendToSceneA(scene *Scene, cmdId uint16, seq uint32, msg pb.Messa
 	}
 }
 
-// SendToSceneACV 给场景内所有指定客户端版本的玩家发消息
+// SendToSceneACV SendToSceneA 的版本过滤变体（"CV"=ClientVersion）
+// 仅发送给客户端版本号匹配的玩家 用于多版本同服共存时下发版本专属消息
 func (g *Game) SendToSceneACV(scene *Scene, cmdId uint16, seq uint32, msg pb.Message, aecUid uint32, clientVersion int) {
 	world := scene.GetWorld()
 	if WORLD_MANAGER.IsAiWorld(world) && SELF != nil {
@@ -548,6 +609,20 @@ func (g *Game) SendToSceneACV(scene *Scene, cmdId uint16, seq uint32, msg pb.Mes
 	}
 }
 
+// ReLoginPlayer 触发客户端"类重登"
+//
+// 发 ClientReconnectNotify 后**客户端会主动断开 KCP 重连**（见 robot/client/client.go:134）
+// 不是无感切换 玩家会看到加载界面 然后从 dispatch → gate → gs 完整走一遍登录流程
+// 调用场景：
+//   - 退出多人世界（BackMyWorld/ChangeWorldToSingleMode/SceneKickPlayer/PlayerLeaveWorld）
+//   - PUBG 死亡退出（game_plugin_pubg.go）
+//   - AI 世界角色复活（player_team.go WorldPlayerReviveReq）
+//
+// **注意**：跨服无感迁移走的是 OnOffline(IsChangeGs=true) → ServerUserGsChangeNotify 路径
+// 那条路径不发 ClientReconnectNotify 客户端 KCP 也不断（见 game_user_manager.go OfflineUser）
+//
+// isQuitMp=true 表示从多人世界退出（reason=QUIT_MP）否则 reason=NONE
+// 设置 NetFreeze 阻止断连前的后续误下发
 func (g *Game) ReLoginPlayer(userId uint32, isQuitMp bool) {
 	reason := proto.ClientReconnectReason_CLIENT_RECONNNECT_NONE
 	if isQuitMp {
@@ -563,6 +638,8 @@ func (g *Game) ReLoginPlayer(userId uint32, isQuitMp bool) {
 	player.NetFreeze = true
 }
 
+// LogoutPlayer 通知客户端登出（不踢KCP连接 客户端会自己关闭）
+// 用于服务端主动让玩家下线但保持登录态可重连的场景
 func (g *Game) LogoutPlayer(userId uint32) {
 	g.SendMsg(cmd.PlayerLogoutNotify, userId, 0, &proto.PlayerLogoutNotify{})
 	player := USER_MANAGER.GetOnlineUser(userId)
@@ -573,6 +650,8 @@ func (g *Game) LogoutPlayer(userId uint32) {
 	player.NetFreeze = true
 }
 
+// KickPlayer 强制踢人 给Gate发ConnCtrlMsg让Gate关掉对应KCP会话
+// reason 见 kcp.Enet*（EnetServerKick/EnetServerShutdown 等）会显示给客户端
 func (g *Game) KickPlayer(userId uint32, reason uint32) {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {

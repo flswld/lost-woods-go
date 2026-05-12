@@ -1,3 +1,5 @@
+// 爬塔相关协议
+
 syntax = "proto3";
 
 package proto;
@@ -6,32 +8,37 @@ import "define.proto";
 
 option go_package = "./;proto";
 
+// 队伍镜像
 message TowerTeam {
-    uint32 tower_team_id = 3;
-    repeated uint64 avatar_guid_list = 14;
+    uint32 tower_team_id = 3;              // 第几个爬塔队伍
+    repeated uint64 avatar_guid_list = 14; // 队员guid，第一个角色就是上场角色
 }
 
+// 关卡记录
 message TowerLevelRecord {
-    repeated uint32 satisfied_cond_list = 13;
-    uint32 level_id = 10;
+    repeated uint32 satisfied_cond_list = 13; // 完成了的星级条件序号
+    uint32 level_id = 10;                     // 关卡ID
 }
 
+// 爬塔进度
 message TowerFloorRecord {
-    uint32 floor_star_reward_progress = 15;
-    map<uint32, uint32> passed_level_map = 8;
-    uint32 floor_id = 12;
-    repeated TowerLevelRecord passed_level_record_list = 2;
+    uint32 floor_star_reward_progress = 15;                 // 星级奖励领取进度（1~3分别表示5星/10星/15星)
+    map<uint32, uint32> passed_level_map = 8;               // 完成了的关卡的记录，也是首通奖励发过的关卡（key:关卡ID value:关卡星数）
+    uint32 floor_id = 12;                                   // 层ID
+    repeated TowerLevelRecord passed_level_record_list = 2; // 完成了的关卡的记录，也是首通奖励发过的关卡
 }
 
+// 爬塔暂存信息
 message TowerCurLevelRecord {
-    repeated TowerTeam tower_team_list = 8;
-    bool is_empty = 6;
-    repeated uint32 buff_id_list = 4;
+    repeated TowerTeam tower_team_list = 8; // 队伍镜像，guid是镜像角色的guid
+    bool is_empty = 6;                      // 是否没有暂存信息
+    repeated uint32 buff_id_list = 4;       // 本层生效的爬塔增益buff
     bool is_upper_part = 2;
-    uint32 cur_level_index = 1;
-    uint32 cur_floor_id = 15;
+    uint32 cur_level_index = 1;             // 关卡组内序号，当前能打的关卡
+    uint32 cur_floor_id = 15;               // 第几层
 }
 
+// 爬塔所有信息，登录或爬塔排期变化时通知（S->C）
 message TowerBriefDataNotify {
     enum CmdId {
         option allow_alias = true;
@@ -41,15 +48,16 @@ message TowerBriefDataNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 total_star_num = 11;
-    uint32 last_floor_index = 8;
+    uint32 total_star_num = 11;           // 当前爬塔排期的总星数
+    uint32 last_floor_index = 8;          // 当前排期内打到的最高层是第几层
     uint32 schedule_start_time = 15;
-    uint32 next_schedule_change_time = 6;
+    uint32 next_schedule_change_time = 6; // 下一个爬塔排期变化时间戳，没有的话为0
     bool is_finished_entrance_floor = 14;
-    uint32 last_level_index = 4;
-    uint32 tower_schedule_id = 5;
+    uint32 last_level_index = 4;          // 当前排期内打到的最高层的最后一关是第几关
+    uint32 tower_schedule_id = 5;         // 当前爬塔排期ID
 }
 
+// 每层的进度变化，一关第一次完成、星数变化、领取星级奖励、发放首通奖励后通知（S->C）
 message TowerFloorRecordChangeNotify {
     enum CmdId {
         option allow_alias = true;
@@ -63,6 +71,7 @@ message TowerFloorRecordChangeNotify {
     repeated TowerFloorRecord tower_floor_record_list = 8;
 }
 
+// 爬塔暂离记录变化通知，设置队伍、一关完成或失败后通知（S->C）
 message TowerCurLevelRecordChangeNotify {
     enum CmdId {
         option allow_alias = true;
@@ -72,9 +81,10 @@ message TowerCurLevelRecordChangeNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    TowerCurLevelRecord cur_level_record = 10;
+    TowerCurLevelRecord cur_level_record = 10; // 其中的is_empty为true表示没有当前关卡进度
 }
 
+// 爬塔每日奖励进度变化通知
 message TowerDailyRewardProgressChangeNotify {
     enum CmdId {
         option allow_alias = true;
@@ -84,10 +94,11 @@ message TowerDailyRewardProgressChangeNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 daily_floor_id = 15;
-    uint32 daily_level_index = 9;
+    uint32 daily_floor_id = 15;   // 今日最好成绩到第几层
+    uint32 daily_level_index = 9; // 今日最好成绩到第几关（按前一关发奖）
 }
 
+// 设置爬塔队伍，只能在非暂离状态设置，设置后进入暂离状态（C->S）
 message TowerTeamSelectReq {
     enum CmdId {
         option allow_alias = true;
@@ -98,10 +109,11 @@ message TowerTeamSelectReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    repeated TowerTeam tower_team_list = 11;
-    uint32 floor_id = 10;
+    repeated TowerTeam tower_team_list = 11; // 要设置的队伍，guid是正式角色的guid
+    uint32 floor_id = 10;                    // 只有在非暂离状态下才需要填这个字段
 }
 
+// 设置爬塔队伍的回复（S->C）
 message TowerTeamSelectRsp {
     enum CmdId {
         option allow_alias = true;
@@ -114,6 +126,7 @@ message TowerTeamSelectRsp {
     int32 retcode = 8;
 }
 
+// 请求爬塔所有信息
 message TowerAllDataReq {
     enum CmdId {
         option allow_alias = true;
@@ -134,6 +147,7 @@ message TowerMonthlyBrief {
     uint32 total_star_count = 12;
 }
 
+// 爬塔所有信息的回复
 message TowerAllDataRsp {
     enum CmdId {
         option allow_alias = true;
@@ -143,25 +157,26 @@ message TowerAllDataRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 tower_schedule_id = 10;
-    uint32 daily_level_index = 9;
+    uint32 tower_schedule_id = 10;                         // 当前爬塔排期ID
+    uint32 daily_level_index = 9;                          // 今日最好成绩到第几关（按前一关发奖）
     map<uint32, uint32> skip_floor_granted_reward_item_map = 12;
     bool is_first_interact = 3;
     bool is_finished_entrance_floor = 1;
-    repeated TowerFloorRecord tower_floor_record_list = 5;
-    uint32 daily_floor_id = 11;
+    repeated TowerFloorRecord tower_floor_record_list = 5; // 爬塔每月进度中的每层记录（哪些层可以打）
+    uint32 daily_floor_id = 11;                            // 今日最好成绩到第几层
     uint32 commemorative_reward_id = 13;
     TowerMonthlyBrief last_schedule_monthly_brief = 1222;
-    uint32 next_schedule_change_time = 6;
+    uint32 next_schedule_change_time = 6;                  // 当前排期的结束时间或下一个爬塔排期开始时间，0表示没有
     uint32 valid_tower_record_num = 7;
     uint32 skip_to_floor_index = 2;
-    map<uint32, uint32> floor_open_time_map = 4;
-    TowerCurLevelRecord cur_level_record = 15;
+    map<uint32, uint32> floor_open_time_map = 4;           // 每层开启时间，0表示已经开启；key是floor_id
+    TowerCurLevelRecord cur_level_record = 15;             // 爬塔暂存信息，这个字段的is_empty为true的话表示非暂离状态
     int32 retcode = 8;
     uint32 schedule_start_time = 914;
     TowerMonthlyBrief monthly_brief = 14;
 }
 
+// 进入爬塔关卡，只能在暂离状态时进入（C->S）
 message TowerEnterLevelReq {
     enum CmdId {
         option allow_alias = true;
@@ -172,9 +187,10 @@ message TowerEnterLevelReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 enter_point_id = 3;
+    uint32 enter_point_id = 3; // 地城入口点ID
 }
 
+// 进入爬塔关卡的返回（S->C）
 message TowerEnterLevelRsp {
     enum CmdId {
         option allow_alias = true;
@@ -184,12 +200,13 @@ message TowerEnterLevelRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    repeated uint32 tower_buff_id_list = 10;
+    repeated uint32 tower_buff_id_list = 10; // 可选buff
     int32 retcode = 1;
-    uint32 level_index = 14;
-    uint32 floor_id = 5;
+    uint32 level_index = 14;                 // 关卡组内序号
+    uint32 floor_id = 5;                     // 层ID
 }
 
+// 选择buff（C->S）
 message TowerBuffSelectReq {
     enum CmdId {
         option allow_alias = true;
@@ -203,6 +220,7 @@ message TowerBuffSelectReq {
     uint32 tower_buff_id = 5;
 }
 
+// 选择buff的返回（C->S）
 message TowerBuffSelectRsp {
     enum CmdId {
         option allow_alias = true;
@@ -216,6 +234,7 @@ message TowerBuffSelectRsp {
     uint32 tower_buff_id = 13;
 }
 
+// 放弃爬塔请求，可以在关卡内或暂离状态时放弃（C->S）
 message TowerSurrenderReq {
     enum CmdId {
         option allow_alias = true;
@@ -227,6 +246,7 @@ message TowerSurrenderReq {
     }
 }
 
+// 放弃爬塔挑战的回复（S->C）
 message TowerSurrenderRsp {
     enum CmdId {
         option allow_alias = true;
@@ -239,6 +259,8 @@ message TowerSurrenderRsp {
     int32 retcode = 9;
 }
 
+// 领取星级奖励（C->S）
+// 剩下的首通奖励、每日奖励、每月奖励暂时都通过邮件发送
 message TowerGetFloorStarRewardReq {
     enum CmdId {
         option allow_alias = true;
@@ -249,9 +271,10 @@ message TowerGetFloorStarRewardReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 floor_id = 15;
+    uint32 floor_id = 15; // 如果同时有多个星级可以领奖，会同时领
 }
 
+// 领取星级奖励的回复（S->C）
 message TowerGetFloorStarRewardRsp {
     enum CmdId {
         option allow_alias = true;
@@ -265,6 +288,7 @@ message TowerGetFloorStarRewardRsp {
     uint32 floor_id = 9;
 }
 
+// 战斗结束通知（S->C）
 message TowerLevelEndNotify {
     enum CmdId {
         option allow_alias = true;
@@ -280,20 +304,21 @@ message TowerLevelEndNotify {
         CONTINUE_STATE_CAN_ENTER_NEXT_FLOOR = 2;
     }
 
-    uint32 next_floor_id = 4;
-    repeated ItemParam reward_item_list = 12;
-    uint32 continue_state = 15;
+    uint32 next_floor_id = 4;                    // 如果打赢了一层的最后一关，且下一层可以打（开放时间、当前层的星数、当前层不是最后一层），下一层的floor_id
+    repeated ItemParam reward_item_list = 12;    // 奖励
+    uint32 continue_state = 15;                  // 0:不能继续 1:能打下一关 2:能进下一层
     bool is_success = 5;
-    repeated uint32 finished_star_cond_list = 6;
+    repeated uint32 finished_star_cond_list = 6; // 如果通关的话，完成了哪些星级评价（TowerLevelExcelConfig.conds里从1开始的序号）
 }
 
 message TowerLevelStarCondData {
     bool is_fail = 15;
-    uint32 cond_value = 9;
-    bool is_pause = 13;
-    uint32 star_cond_index = 6;
+    uint32 cond_value = 9;      // 进度值
+    bool is_pause = 13;         // 如果是正计时，是否暂停计时
+    uint32 star_cond_index = 6; // 第几个星级评价条件，目前只会通知正计时的进度
 }
 
+// 关卡进度变化通知
 message TowerLevelStarCondNotify {
     enum CmdId {
         option allow_alias = true;
@@ -308,6 +333,7 @@ message TowerLevelStarCondNotify {
     repeated TowerLevelStarCondData cond_data_list = 9;
 }
 
+// 中场换人通知
 message TowerMiddleLevelChangeTeamNotify {
     enum CmdId {
         option allow_alias = true;

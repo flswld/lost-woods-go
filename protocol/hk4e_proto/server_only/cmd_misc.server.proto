@@ -1,3 +1,5 @@
+// 服务器杂项协议
+
 syntax = "proto3";
 
 package proto;
@@ -7,6 +9,7 @@ import "server_only/config.server.proto";
 
 option go_package = "./;proto";
 
+// 进程检测到配置了停服维护信息
 message StopServerConfigNotify {
     enum CmdId {
         NONE = 0;
@@ -14,6 +17,7 @@ message StopServerConfigNotify {
     }
 }
 
+// 连接上nodeserver后需要通知工作线程
 message NodeserverConnectedAndRegisteredNotify {
     enum CmdId {
         NONE = 0;
@@ -23,66 +27,73 @@ message NodeserverConnectedAndRegisteredNotify {
     uint32 nodeserver_id = 1;
 }
 
+// 一个协议发送给多个玩家，服务器内部发送一条协议即可，在gameserver上对每个玩家发送一条
 message MultiPlayerMsg {
     enum CmdId {
         NONE = 0;
         CMD_ID = 10012;
     }
 
-    repeated uint32 uid_list = 1;
-    bytes proto_bin = 2;
+    repeated uint32 uid_list = 1; // UID列表
+    bytes proto_bin = 2;          // 需要发送的协议
 }
 
+// gateserver向dispatch注册
 message AddGateserverNotify {
     enum CmdId {
         NONE = 0;
         CMD_ID = 10035;
     }
 
-    uint32 listen_port = 1;
-    uint32 outer_ip = 2;
+    uint32 listen_port = 1; // 监听端口
+    uint32 outer_ip = 2;    // 外网端口
     bool use_domain_name = 3;
     string domain_name = 4;
 }
 
+// 服务注册
 message RegisterServiceNotify {
     enum CmdId {
         NONE = 0;
         CMD_ID = 10007;
     }
 
-    repeated ServiceType service_type_list = 1;
+    repeated ServiceType service_type_list = 1; // 当前机器上运行的服务
 }
 
+// Game->Gate 玩家迁移
 message PlayerTransferNotify {
     enum CmdId {
         NONE = 0;
         CMD_ID = 10021;
     }
 
-    uint32 transfer_uid = 1;
-    uint32 target_uid = 2;
+    uint32 transfer_uid = 1; // 迁移玩家
+    uint32 target_uid = 2;   // 目标玩家
     uint32 target_home_owner_uid = 3;
     uint32 target_home_gameserver_id = 4;
     uint32 target_home_param = 5;
 }
 
+// 包数量信息
 message PacketCountInfo {
     uint32 cmd_id = 1;
     uint32 count = 2;
 }
 
+// 客户端发包频率超限通知
 message PacketFreqencyExceedNotify {
     enum CmdId {
         NONE = 0;
         CMD_ID = 10003;
     }
 
-    uint32 packet_count = 1;
-    uint32 interval = 2;
-    repeated PacketCountInfo packet_count_list = 3;
+    uint32 packet_count = 1;                        // 包数量
+    uint32 interval = 2;                            // 时间段(毫秒)
+    repeated PacketCountInfo packet_count_list = 3; // 每个包的数量
 }
 
+// 场景Group批量异步加载
 message SceneAsyncLoadGroupBatchNotify {
     enum CmdId {
         NONE = 0;
@@ -94,6 +105,7 @@ message CrcVersionConfig {
     repeated string client_version_list = 1;
 }
 
+// gameserver往nodeserver同步数值和资源版本
 message ClientVersionSyncNotify {
     enum CmdId {
         NONE = 0;
@@ -106,6 +118,7 @@ message ClientVersionSyncNotify {
     map<uint32, ResVersionConfig> next_res_version_config_map = 4;
 }
 
+// 服务成功返回
 message RegisterServiceSuccessNotify {
     enum CmdId {
         NONE = 0;
@@ -113,6 +126,7 @@ message RegisterServiceSuccessNotify {
     }
 }
 
+// 主线程成功加载数值
 message ReloadConfigNotify {
     enum CmdId {
         NONE = 0;

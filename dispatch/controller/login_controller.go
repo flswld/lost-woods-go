@@ -19,6 +19,24 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// SDK 登录接口实现 - 三段式登录
+//
+// 1) apiLogin: 账号密码登录拿 Token（首次登录或新设备）
+// 2) apiVerify: Token 续期验证（已登录玩家恢复会话）
+// 3) v2Login: 用 Token 换 ComboToken（实际游戏内会话凭证）
+//
+// 加密设计：
+//   - 客户端用 region 下发的 PwdPubKey RSA 加密密码 dispatch 用 PwdPrivKey 解密
+//   - **特殊兼容**：RSA 解密失败时 fallback 到 "@@ mode"
+//     · 客户端使用其他工具修改 PublicKey 后 dispatch 解密会失败
+//     · @@ mode 让玩家把 "用户名@@密码" 都填到用户名输入框 密码框任意填
+//     · 这是项目作者照顾各种 hook 工具的兼容方案
+//
+// 账号自动注册：第一次登录的用户名直接注册（用 MD5 存密码 不加盐）
+//   StandaloneMode 用本地自增 id（c.nextSdkAccountId）
+//   集群模式用 dao.GetNextSdkAccountId（DB 自增）
+
+// apiLogin 账号密码登录（POST /hk4e_:name/mdk/shield/api/login）
 func (c *Controller) apiLogin(ctx *gin.Context) {
 	requestData := new(api.LoginAccountRequestJson)
 	err := ctx.ShouldBindJSON(requestData)
@@ -162,6 +180,11 @@ func (c *Controller) apiLogin(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, responseData)
 }
 
+// apiVerify Token 续期验证（POST /hk4e_:name/mdk/shield/api/verify）
+//
+// 客户端在已登录状态再次启动时不重新输入密码 直接用本地缓存的 Token 验证
+// 校验：Token 与 DB 一致 + 创建时间不超过 7 天
+// 通过则返回 200 让客户端走下一步（v2Login 拿 ComboToken）
 func (c *Controller) apiVerify(ctx *gin.Context) {
 	requestData := new(api.LoginTokenRequest)
 	err := ctx.ShouldBindJSON(requestData)
@@ -199,6 +222,15 @@ func (c *Controller) apiVerify(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, responseData)
 }
 
+// v2Login Token → ComboToken 交换（POST /hk4e_:name/combo/granter/login/v2/login）
+//
+// SDK 登录流程的最后一步：
+//  1. 校验 Token 有效（与 DB 中保存的一致）
+//  2. 生成新的 ComboToken（20 字节随机十六进制 = 40 字符）写入 DB
+//  3. 返回给客户端
+//
+// ComboToken 是游戏会话凭证 客户端连 KCP 时通过 GetPlayerTokenReq.AccountToken 提交
+// Gate 通过 /gate/token/verify 调 dispatch 验证 ComboToken（即 gateTokenVerify 接口）
 func (c *Controller) v2Login(ctx *gin.Context) {
 	requestData := new(api.ComboTokenReq)
 	err := ctx.ShouldBindJSON(requestData)

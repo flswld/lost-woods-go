@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"hk4e/common/config"
@@ -20,14 +21,45 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 )
 
+// Dao 数据访问层
+//
+// 三选一数据库（按 database.url 前缀自动切换）：
+//   - mongodb://...  → MongoDB（Bson 嵌入式存储 字段名直接对应）
+//   - mysql://...    → MySQL/GORM（玩家档作为 BLOB 存储）
+//   - sqlite://...   → SQLite/GORM（开发/小规模 单文件）
+//
+// 双路缓存（standalone 模式不用 Redis）：
+//   - 单 Redis：地址不含 "," 时
+//   - Redis Cluster：地址含 "," 时（集群模式）
+//
+// 数据写入策略（详见 CLAUDE.md "三层存储"）：
+//   - 内存（in-process）：USER_MANAGER.playerMap
+//   - Redis：跨 GS 共享 + msgpack+LZ4 压缩 + 30 天过期
+//   - DB：MongoDB/SQL 主存 写频率最低
+//
+// 写入流向：内存修改 → 异步存档协程 → Redis + DB
+// 读取流向：内存 → Redis（命中率高）→ DB（最后回源）
+
 type Dao struct {
-	mongo        *mongo.Client
-	mongoDb      *mongo.Database
-	gormDb       *gorm.DB
-	redis        *redis.Client
-	redisCluster *redis.ClusterClient
+	mongo        *mongo.Client        // MongoDB 客户端（mongodb 模式）
+	mongoDb      *mongo.Database      // MongoDB 数据库实例（gs_hk4e）
+	gormDb       *gorm.DB             // GORM 客户端（mysql/sqlite 模式）
+	redis        *redis.Client        // Redis 单实例
+	redisCluster *redis.ClusterClient // Redis 集群（用 Addrs 列表配置）
+	lockTokenMap sync.Map             // 分布式锁 token 表（uid → token 字符串）见 player_redis.go DistLock
 }
 
+// NewDao 创建数据访问层（GS 启动时调用一次）
+//
+// 处理：
+//  1. 按 url 前缀选择 DB 实现：
+//     · mongodb://: 连 Mongo + 连接池 10/100
+//     · mysql://: GORM 连 MySQL + 连接池 10/100/1h
+//     · sqlite://: GORM 连 SQLite 单文件
+//  2. SQL 模式自动建表（PlayerGorm/ChatMsgGorm/SceneBlockGorm）
+//  3. 集群模式（StandaloneModeEnable=false）才连 Redis
+//     · 地址含逗号 → Redis Cluster
+//     · 否则 → 单实例
 func NewDao() (*Dao, error) {
 	r := new(Dao)
 

@@ -1,3 +1,5 @@
+// 为服务器玩家数据协议
+
 syntax = "proto3";
 
 package proto;
@@ -7,6 +9,7 @@ import "server_only/bin.server.proto";
 
 option go_package = "./;proto";
 
+// 保存用户数据
 message SavePlayerDataReq {
     enum CmdId {
         option allow_alias = true;
@@ -30,7 +33,7 @@ message SavePlayerDataRsp {
     }
 
     int32 retcode = 1;
-    uint32 data_version = 2;
+    uint32 data_version = 2; // 写回的数据version
     uint32 save_stat_id = 3;
 }
 
@@ -47,6 +50,7 @@ message PlayerOnlineStatusInfo {
     string country_code = 5;
 }
 
+// 玩家在线状态通知 game->node, redis的核心数据不用这个协议
 message PlayerOnlineStatusNotify {
     enum Enum {
         NONE = 0;
@@ -62,28 +66,31 @@ message ServiceDisconnectNotify {
         CMD_ID = 10103;
     }
 
-    ServiceType type = 1;
-    uint32 ip = 2;
+    ServiceType type = 1; // 服务类型
+    uint32 ip = 2;        // 对应服务的IP
 }
 
+// 客户端掉线通知, 用来通知gameserver工作线程回写数据、定时logout
 message PlayerDisconnectNotify {
     enum Enum {
         NONE = 0;
         CMD_ID = 10190;
     }
 
-    uint32 data = 1;
+    uint32 data = 1; // ENetReason,服务端区分断开的原因
 }
 
+// game通知gate断开当前连接
 message DisconnectClientNotify {
     enum CmdId {
         NONE = 0;
         CMD_ID = 10173;
     }
 
-    uint32 data = 1;
+    uint32 data = 1; // ENetReason
 }
 
+// 加载Group用的提示包，不会真的用于发送消息
 message SysCreateGroupReq {
     enum CmdId {
         NONE = 0;

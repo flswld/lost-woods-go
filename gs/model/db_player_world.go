@@ -1,40 +1,62 @@
 package model
 
+// 玩家世界子模型 - 持久化大世界进度
+//
+// **本模型只存"全局/账号级"进度**，单个场景的格子细节（怪物状态/宝箱开关等）在 SceneBlock 表中
+//
+// 字段语义：
+//   - SceneMap[sceneId]: 每个场景的解锁状态（传送点 / 区域 / 场景标签）
+//   - MapMarkList: 玩家在地图上手动标记的点（最多通常 N 个 客户端 MarkMapReq 控制）
+//   - GameTime: **房主玩家累计游戏时间**（秒 一直累加 离线不计时 不循环 初始 1029）
+//     · 客户端拿这个秒数 mod 86400 算当天某个时刻 驱动昼夜变化/天气/NPC 对话分支
+//     · 多人世界使用房主的时间 不是同步——你进朋友世界看到的是朋友的时间
+//   - WidgetSlotMap: 小工具栏（如夜兰回血 派蒙的"心愿之歌"等）
+//
+// DbScene 单场景解锁项（懒加载 GetSceneById 时自动创建）：
+//   - UnlockPointMap: 已解锁的传送锚点 ID（七天神像 + 普通传送点）
+//   - UnHidePointMap: 已揭开的隐藏锚点 ID（如风龙废墟内的传送）
+//   - UnlockAreaMap: 已解锁的地图区域 ID（蒙德城/望风山地等）
+//   - SceneTagMap: 场景标签（季节性活动 / 任务进度相关的场景状态）
+
 import (
 	"hk4e/gdconf"
 )
 
+// DbWorld 大世界模块根模型
 type DbWorld struct {
-	SceneMap      map[uint32]*DbScene
-	MapMarkList   []*MapMark
-	GameTime      uint32 // 游戏内提瓦特大陆的时间
-	WidgetSlotMap map[uint8]*Widget
+	SceneMap      map[uint32]*DbScene // 每场景独立的解锁状态
+	MapMarkList   []*MapMark          // 玩家手动地图标记
+	GameTime      uint32              // 玩家累计游戏时间（秒）每秒+1 离线不计时 不循环 初始 1029（与官服新号开场一致）
+	WidgetSlotMap map[uint8]*Widget   // 小工具栏配置
 }
 
+// DbScene 单场景解锁状态 GetSceneById 时懒加载创建
 type DbScene struct {
 	SceneId        uint32
-	UnlockPointMap map[uint32]bool
-	UnHidePointMap map[uint32]bool
-	UnlockAreaMap  map[uint32]bool
-	SceneTagMap    map[uint32]bool
+	UnlockPointMap map[uint32]bool // 已解锁的传送锚点
+	UnHidePointMap map[uint32]bool // 已揭开的隐藏锚点
+	UnlockAreaMap  map[uint32]bool // 已解锁的地图区域
+	SceneTagMap    map[uint32]bool // 场景标签（活动/任务进度相关）
 }
 
+// MapMark 玩家手动地图标记
 type MapMark struct {
 	SceneId   uint32
 	Pos       *Vector
-	PointType uint32
+	PointType uint32 // 标记类型（任务/玩家/...）
 	Name      string
 }
 
+// Widget 小工具栏槽位
 type Widget struct {
-	Tag        uint8
-	MaterialId uint32
+	Tag        uint8  // 槽位类型
+	MaterialId uint32 // 小工具物品 id
 }
 
 func (p *Player) GetDbWorld() *DbWorld {
 	if p.DbWorld == nil {
 		p.DbWorld = new(DbWorld)
-		p.DbWorld.GameTime = 8 * 60 // 初始时间
+		p.DbWorld.GameTime = 1029 // 与官服新号开场一致 之后每秒+1 离线不计时
 	}
 	if p.DbWorld.SceneMap == nil {
 		p.DbWorld.SceneMap = make(map[uint32]*DbScene)

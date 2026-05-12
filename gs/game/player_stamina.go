@@ -11,9 +11,35 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
+// 体力 模块（耐力管理 角色体力 + 载具耐力）
+//
+// 体力分两类：
+//   - 玩家体力（player.StaminaInfo）：上限 PROP_MAX_STAMINA（默认 240）
+//     · 攀爬/游泳/冲刺/连击大招消耗
+//     · 闲置 1.5 秒后开始恢复（STAMINA_PLAYER_RESTORE_DELAY=15 个 tick）
+//   - 载具耐力（GadgetVehicleEntity）：每个载具独立 上限/恢复速率配置在 GadgetJson
+//     · 划船/驾驶时消耗 离开载具或闲置后恢复
+//
+// 触发方式：
+//   - 即时消耗（ImmediateStamina）：动作开始一次性扣（攀爬开始/冲刺前摇/攀爬跳跃/游泳冲刺开始）
+//   - 持续消耗（SustainStaminaHandler）：动作过程中每 tick 持续扣（划船/普通游泳）
+//   - 角度修正（SceneAvatarStaminaStepReq）：攀爬时按斜度修正消耗（倒三角更费体力）
+//
+// 特殊状态：
+//   - player.StaminaInf=true (GM 命令 staminainf)：无限体力 跳过所有消耗
+//   - player.Pause=true (玩家最小化窗口)：所有体力计算暂停
+//
+// 玩家溺水（HandleDrown）：体力扣到 0 但还在水里 → SubAvatarHp 100% 扣血触发死亡
+
 /************************************************** 接口请求 **************************************************/
 
 // SceneAvatarStaminaStepReq 缓慢游泳或缓慢攀爬时消耗耐力
+//
+// 攀爬时按角度修正：
+//   - 0~90度（正坡）：消耗 = base - (-x + 10)（坡度越陡消耗越多）
+//   - <0度（倒坡 倒三角）：消耗 = base - (-2x + 10)（倒坡消耗 2 倍）
+//
+// 客户端按 30Hz 频率发这个请求 服务端按需扣体力
 func (g *Game) SceneAvatarStaminaStepReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.SceneAvatarStaminaStepReq)
 
@@ -56,7 +82,16 @@ func (g *Game) SceneAvatarStaminaStepReq(player *model.Player, payloadMsg pb.Mes
 
 /************************************************** 游戏功能 **************************************************/
 
-// ImmediateStamina 处理即时耐力消耗
+// ImmediateStamina 即时耐力消耗（动作开始时扣一次）
+//
+// 调用方：handleEntityMove 玩家位置变化时按 motionState 调用
+// 动作状态变化才扣（开始攀爬/开始冲刺/攀爬跳/游泳冲刺）持续动作不在这扣
+//
+// 4 种触发：
+//   - MOTION_CLIMB: 攀爬开始 扣 STAMINA_COST_CLIMB_START
+//   - MOTION_DASH_BEFORE_SHAKE: 冲刺前摇 扣 STAMINA_COST_SPRINT
+//   - MOTION_CLIMB_JUMP: 攀爬跳跃 扣 STAMINA_COST_CLIMB_JUMP
+//   - MOTION_SWIM_DASH: 游泳冲刺开始 扣 STAMINA_COST_SWIM_DASH_START
 func (g *Game) ImmediateStamina(player *model.Player, motionState proto.MotionState) {
 	// 玩家暂停状态不更新耐力
 	if player.Pause {
@@ -166,7 +201,14 @@ func (g *Game) VehicleRestoreStaminaHandler(player *model.Player) {
 	}
 }
 
-// SustainStaminaHandler 处理持续耐力消耗
+// SustainStaminaHandler 持续耐力消耗/恢复处理（每 tick 调用一次）
+//
+// 由 TICK_MANAGER 100ms 玩家 tick 触发 处理：
+//   - 玩家在载具中：调 UpdateVehicleStamina 走载具耐力
+//   - 玩家在陆地：调 UpdatePlayerStamina 走玩家体力
+//
+// player.StaminaInfo.CostStamina 由 SetStaminaCost 设置（按当前 motionState）
+// 正值=消耗 负值=恢复 0=不变
 func (g *Game) SustainStaminaHandler(player *model.Player) {
 	// 玩家暂停状态不更新耐力
 	if player.Pause {

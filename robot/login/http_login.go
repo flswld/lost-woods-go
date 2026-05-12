@@ -19,12 +19,36 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
+// Robot 模拟客户端的 dispatch / SDK 登录 HTTP 流程
+//
+// 完整还原原神客户端的网络层登录链路 用于测试 dispatch 实现的正确性
+//
+// 关键解密步骤：
+//   - 一级 dispatch: 返回 base64 编码的 PB（QueryRegionListHttpRsp）直接解码
+//   - 二级 dispatch: 返回 JSON 包含加密的 Content 字段
+//     · Content 是 RSA 加密的（用 region_enc_key_N.pem 私钥）
+//     · 256 字节一段（RSA 单次最大密文长度）需要分段解密
+//     · 解密后是 PB（QueryCurrRegionHttpRsp）含 GateIp/Port/SecretKey
+//
+// DispatchKey: 从 region 响应中拿到 用于客户端 KCP 通信的 XOR 密钥派生
+
+// DispatchInfo 二级 dispatch 解密后的关键信息
 type DispatchInfo struct {
-	GateIp      string
-	GatePort    uint32
-	DispatchKey []byte
+	GateIp      string // Gate KCP 监听地址
+	GatePort    uint32 // Gate KCP 监听端口
+	DispatchKey []byte // ec2b 派生的 XOR 密钥
 }
 
+// GetDispatchInfo 模拟一/二级 dispatch 全流程获取 Gate 地址
+//
+// 处理流程：
+//  1. GET regionListUrl → base64 → PB QueryRegionListHttpRsp（区服列表）
+//  2. 按 SelectRegionIndex 选一个区服 + 对应 dispatchUrl
+//  3. GET curRegionUrl → JSON → Content 字段是 RSA 加密二进制
+//  4. 用 keyId 选对应私钥 RSA 分段解密（256B 一段）
+//  5. 解密后是 PB QueryCurrRegionHttpRsp 含 GateIp/Port + SecretKey（ec2b）
+//
+// keyId 来自 robot 配置 必须与 region_enc_key_N.pem 文件名匹配（N=1~5）
 func GetDispatchInfo(regionListUrl string, regionListParam string, curRegionUrl string, curRegionParam string, keyId string) (*DispatchInfo, error) {
 	logger.Info("http get url: %v", regionListUrl+regionListParam)
 	regionListBase64, err := httpclient.GetRaw(regionListUrl + regionListParam)
@@ -110,12 +134,27 @@ func GetDispatchInfo(regionListUrl string, regionListParam string, curRegionUrl 
 	return dispatchInfo, nil
 }
 
+// AccountInfo SDK 登录拿到的账号信息（gateLogin 需要）
+//   - AccountId: 玩家 OpenId 数字形式
+//   - Token: apiLogin 拿到的 Token（7 天有效）
+//   - ComboToken: v2Login 拿到的 ComboToken（24 小时有效 KCP 握手用）
 type AccountInfo struct {
 	AccountId  uint32
 	Token      string
 	ComboToken string
 }
 
+// AccountLogin SDK 登录拿 ComboToken 的两步流程
+//
+// 步骤：
+//  1. POST /hk4e_global/mdk/shield/api/login → 用账号密码登录拿 Token
+//  2. POST /hk4e_global/combo/granter/login/v2/login → Token 换 ComboToken
+//
+// 注意：第二步的 Data 字段是 LoginTokenData JSON 字符串（嵌套 JSON）
+//
+//	服务端二次解析才能拿到 Token
+//
+// IsCrypto=true 表示密码已 RSA 加密（但 robot 没真加密 dispatch 解密失败会 fallback 到 @@ mode）
 func AccountLogin(loginSdkUrl string, account string, password string) (*AccountInfo, error) {
 	loginAccountRequestJson := &api.LoginAccountRequestJson{
 		Account:  account,

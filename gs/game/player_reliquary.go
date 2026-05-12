@@ -14,13 +14,37 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
+// 圣遗物养成 模块
+//
+// 主要养成：
+//   - 升级（ReliquaryUpgradeReq）：精通经验之冠/初阶/高阶 + 低星圣遗物作素材
+//   - 装备（player_equip.go 的 WearPlayerAvatarReliquary）：5 个槽位 - 花/羽/沙/杯/冠
+//   - 追加词条：每升 4 级（4/8/12/16/20）有几率刷新一个新副词条 5 星最多 4 个副词条
+//
+// **现状**：
+//   - 升级/词条计算完整 经验暴击概率与官方一致（1% × 5 倍 / 8% × 2 倍 / 91% × 1 倍）
+//   - 主属性/副词条参与战斗属性计算（FightProp 计算包含圣遗物词条）
+//   - **2/4 件套套装效果不生效**：套装效果（如"风套2件套带4件套加暴伤"）依赖 Ability 系统
+//   - ReliquaryPromoteReq 直接返回空响应（突破到 21 级是消耗大圣遗物经验之冠 项目未实现）
+
 const (
-	RELIQUARY_APPEND_PROP_MAX = 4
-	RELIQUARY_CONV_EXP        = 0.8
+	RELIQUARY_APPEND_PROP_MAX = 4   // 副词条最大数量（5 星上限）
+	RELIQUARY_CONV_EXP        = 0.8 // 圣遗物作素材的经验转换率（80% 自身经验返还）
 )
 
 /************************************************** 接口请求 **************************************************/
 
+// ReliquaryUpgradeReq 圣遗物升级请求
+//
+// 处理：
+//  1. 经验来源两类：
+//     · 经验材料（精通经验之冠 4001/初阶 4002/低阶 4003）：从 ItemUseList 取 ADD_RELIQUARY_EXP
+//     · 圣遗物作素材：基础经验 BaseConvExp + 已有经验 × 0.8（有"经验返还"机制）
+//  2. 经验暴击：1% 概率 × 5 倍 / 8% 概率 × 2 倍 / 91% 概率 × 1 倍（与官服一致）
+//  3. 摩拉成本 = 总经验数（1:1 比例）
+//  4. 按等级表 reliquaryLevelConfig.Exp 升级 多余经验保留到下次
+//  5. 追加副词条：每升 4 级（PropAddLevel = 4/8/12/16/20）调用 AppendReliquaryProp 追加 1 词条
+//  6. 装备时 → UpdatePlayerAvatarFightProp 重算面板
 func (g *Game) ReliquaryUpgradeReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.ReliquaryUpgradeReq)
 	reliquary, ok := player.GameObjectGuidMap[req.TargetReliquaryGuid].(*model.Reliquary)
@@ -171,6 +195,8 @@ func (g *Game) ReliquaryUpgradeReq(player *model.Player, payloadMsg pb.Message) 
 	g.SendMsg(cmd.ReliquaryUpgradeRsp, player.PlayerId, player.ClientSeq, rsp)
 }
 
+// ReliquaryPromoteReq 圣遗物突破请求（**未实现** 直接返回空响应）
+// 圣遗物突破=升满 20 级后再上一级（21级）需要消耗大圣遗物经验 项目作者没做这部分
 func (g *Game) ReliquaryPromoteReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.ReliquaryPromoteReq)
 	logger.Debug("ReliquaryPromoteReq: %+v", req)
@@ -190,9 +216,11 @@ func (g *Game) GetAllReliquaryDataConfig() map[int32]*gdconf.ItemData {
 	return allReliquaryDataConfig
 }
 
+// GetReliquaryMainDataRandomByDepotId 按主属性词库 ID 随机一个主属性
+// 走 RWS（按权重轮盘抽签）：花/羽固定 HP/ATK 一种 沙/杯/冠的权重各异
 func (g *Game) GetReliquaryMainDataRandomByDepotId(mainPropDepotId int32) *gdconf.ReliquaryMainData {
-	mainPropMap, exist := gdconf.GetReliquaryMainDataMap()[mainPropDepotId]
-	if !exist {
+	mainPropMap := gdconf.GetReliquaryMainDataMapByDepotId(mainPropDepotId)
+	if mainPropMap == nil {
 		return nil
 	}
 	weightAll := int32(0)
@@ -213,7 +241,14 @@ func (g *Game) GetReliquaryMainDataRandomByDepotId(mainPropDepotId int32) *gdcon
 	return nil
 }
 
-func (g *Game) AddPlayerReliquary(userId uint32, itemId uint32) uint64 {
+// AddPlayerReliquary 给予玩家圣遗物（GM 命令/秘境奖励/合成）
+//
+// 参数：
+//   - mainPropId=0 时按 ItemData.MainPropDepotId 随机抽主属性
+//   - appendPropIdList=nil 时按 AppendPropCount 配置随机生成初始副词条数量
+//
+// 流程：扣容量 → 创建 Reliquary 对象 → 调 AppendReliquaryProp 生成初始词条 → 通知客户端
+func (g *Game) AddPlayerReliquary(userId uint32, itemId uint32, mainPropId uint32, appendPropIdList []uint32) uint64 {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {
 		logger.Error("player is nil, uid: %v", userId)
@@ -224,14 +259,16 @@ func (g *Game) AddPlayerReliquary(userId uint32, itemId uint32) uint64 {
 		logger.Error("reliquary config error, itemId: %v", itemId)
 		return 0
 	}
-	reliquaryMainConfig := g.GetReliquaryMainDataRandomByDepotId(reliquaryConfig.MainPropDepotId)
-	if reliquaryMainConfig == nil {
-		logger.Error("reliquary main config error, mainPropDepotId: %v", reliquaryConfig.MainPropDepotId)
-		return 0
-	}
 	reliquaryId := uint64(g.snowflake.GenId())
 	// 圣遗物主属性
-	mainPropId := uint32(reliquaryMainConfig.MainPropId)
+	if mainPropId == 0 {
+		reliquaryMainConfig := g.GetReliquaryMainDataRandomByDepotId(reliquaryConfig.MainPropDepotId)
+		if reliquaryMainConfig == nil {
+			logger.Error("reliquary main config error, mainPropDepotId: %v", reliquaryConfig.MainPropDepotId)
+			return 0
+		}
+		mainPropId = uint32(reliquaryMainConfig.MainPropId)
+	}
 	// 玩家添加圣遗物
 	dbReliquary := player.GetDbReliquary()
 	// 校验背包圣遗物容量
@@ -245,14 +282,18 @@ func (g *Game) AddPlayerReliquary(userId uint32, itemId uint32) uint64 {
 		return 0
 	}
 	// 设置圣遗物初始词条
-	g.AppendReliquaryProp(reliquary, reliquaryConfig.AppendPropCount)
+	if len(appendPropIdList) == 0 {
+		g.AppendReliquaryProp(reliquary, reliquaryConfig.AppendPropCount)
+	} else {
+		reliquary.AppendPropIdList = appendPropIdList
+	}
 	g.SendMsg(cmd.StoreItemChangeNotify, userId, player.ClientSeq, g.PacketStoreItemChangeNotifyByReliquary(reliquary))
 	return reliquaryId
 }
 
 func (g *Game) GetReliquaryAffixDataRandomByDepotId(appendPropDepotId int32, excludeMainPropType uint32, excludeAppendPropIdList []uint32) *gdconf.ReliquaryAffixData {
-	appendPropMap, exist := gdconf.GetReliquaryAffixDataMap()[appendPropDepotId]
-	if !exist {
+	appendPropMap := gdconf.GetReliquaryAffixDataMapByDepotId(appendPropDepotId)
+	if appendPropMap == nil {
 		return nil
 	}
 	weightAll := int32(0)
@@ -262,7 +303,7 @@ func (g *Game) GetReliquaryAffixDataRandomByDepotId(appendPropDepotId int32, exc
 		if excludeMainPropType == uint32(data.PropType) {
 			continue
 		}
-		exist = false
+		exist := false
 		for _, excludeAppendPropId := range excludeAppendPropIdList {
 			if uint32(data.AppendPropId) == excludeAppendPropId {
 				exist = true
@@ -287,7 +328,14 @@ func (g *Game) GetReliquaryAffixDataRandomByDepotId(appendPropDepotId int32, exc
 	return nil
 }
 
-// AppendReliquaryProp 圣遗物追加属性
+// AppendReliquaryProp 圣遗物追加副词条
+//
+// 两种逻辑：
+//   - 副词条数 < 4: 解锁新词条 排除已有词条 + 主属性词条
+//   - 副词条数 = 4: 强化现有词条之一 从 4 个已有词条中随机选 1 个加强（最多 6 次强化机会）
+//
+// 走 RWS 随机：每个副词条配 RandomWeight 不同词条出现概率不同
+// 注意：与主属性同类型的词条会被排除（如花的主属性是HP固定 不会再出HP副词条）
 func (g *Game) AppendReliquaryProp(reliquary *model.Reliquary, count int32) {
 	// 获取圣遗物配置表
 	reliquaryConfig := gdconf.GetItemDataById(int32(reliquary.ItemId))
@@ -296,7 +344,7 @@ func (g *Game) AppendReliquaryProp(reliquary *model.Reliquary, count int32) {
 		return
 	}
 	// 主属性配置表
-	reliquaryMainConfig := gdconf.GetReliquaryMainDataByDepotIdAndPropId(reliquaryConfig.MainPropDepotId, int32(reliquary.MainPropId))
+	reliquaryMainConfig := gdconf.GetReliquaryMainDataByPropId(int32(reliquary.MainPropId))
 	if reliquaryMainConfig == nil {
 		logger.Error("reliquary main config error, mainPropDepotId: %v, propId: %v", reliquaryConfig.MainPropDepotId, reliquary.MainPropId)
 		return
@@ -312,7 +360,7 @@ func (g *Game) AppendReliquaryProp(reliquary *model.Reliquary, count int32) {
 			}
 		} else {
 			// 强化现有词条
-			for _, reliquaryAffixConfig := range gdconf.GetReliquaryAffixDataMap()[reliquaryConfig.AppendPropDepotId] {
+			for _, reliquaryAffixConfig := range gdconf.GetReliquaryAffixDataMapByDepotId(reliquaryConfig.AppendPropDepotId) {
 				exist := false
 				for _, appendPropId := range reliquary.AppendPropIdList {
 					if uint32(reliquaryAffixConfig.AppendPropId) == appendPropId {

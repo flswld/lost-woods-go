@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"hk4e/common/config"
@@ -20,12 +21,26 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 )
 
+// gate 数据访问层
+//
+// gate 的 DB 与 gs 的 DB **不是同一个**：
+//   - gs 存玩家档（PlayerGorm/ChatMsgGorm/SceneBlockGorm）数据库名 gs_hk4e
+//   - gate 存账号映射（AccountGorm）数据库名 gate_hk4e
+//
+// AccountGorm 字段：accountId（uid 雪花 id）+ openId（SDK 账号 id）+ token + lastLoginTime 等
+// 用于：
+//   - doGateLogin 中 OpenId ↔ Uid 映射查询
+//   - 跨服顶号 Redis 分布式锁（DistLock/DistUnlock）
+//
+// 三选一 DB（按 url 前缀切换）+ 单/集群 Redis（standalone 模式不连）
+
 type Dao struct {
 	mongo        *mongo.Client
 	mongoDb      *mongo.Database
 	gormDb       *gorm.DB
 	redis        *redis.Client
 	redisCluster *redis.ClusterClient
+	lockTokenMap sync.Map // 分布式锁 token 表（openId → token 字符串）见 account_redis.go DistLock
 }
 
 func NewDao() (*Dao, error) {

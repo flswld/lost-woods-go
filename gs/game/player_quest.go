@@ -14,9 +14,30 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
+// 任务系统 模块（接入有限 仅做了一小部分）
+//
+// 任务三大入口：
+//   - 玩家行为驱动：AcceptQuest（接取检查）+ TriggerQuest（玩家行为推进任务）
+//   - Lua 脚本驱动：lua_func.go 的 ScriptLib.AddQuestProgress → TriggerQuest(LUA_NOTIFY)
+//   - 客户端主动：AddQuestContentProgressReq（任务系统的客户端预留入口）
+//
+// 任务生命周期：
+//   AcceptQuest（接取条件检查）→ StartQuest（任务开始 + 执行 StartExecList）
+//      → TriggerQuest（玩家行为推进 finishCond 累加）→ CheckQuestFinish
+//      → FinishQuest（执行 FinishExecList 给奖励）+ DeleteQuest from active
+//   或 → FailQuest（任务失败 执行 FailExecList）
+//
+// **现状（参见 CLAUDE.md "任务系统协作"）**：
+//   - AcceptCond 仅支持 STATE_EQUAL / STATE_NOT_EQUAL 两种条件类型
+//   - AcceptCondCompose 6 种逻辑都已实现：NONE/AND, OR, A_AND_ETCOR, A_AND_B_AND_ETCOR, A_OR_ETCAND, A_OR_B_OR_ETCAND
+//   - ExecType 12+ 种已实现（NOTIFY_GROUP_LUA / REFRESH_GROUP_SUITE / SET_OPEN_STATE 等）
+//   - **主线/支线/世界任务/邀约任务的完整流程未实现** 仅做了任务的"骨架机制" 不能完整跑通官服剧情
+
 /************************************************** 接口请求 **************************************************/
 
-// AddQuestContentProgressReq 添加任务内容进度请求
+// AddQuestContentProgressReq 客户端主动推进任务进度请求
+// 一些任务的完成条件由客户端检测（如对话选项/特殊互动）由客户端发请求让服务端推进
+// 处理后立即调 AcceptQuest 检查是否解锁了新任务（任务接取条件可能依赖另一任务的完成状态）
 func (g *Game) AddQuestContentProgressReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.AddQuestContentProgressReq)
 
@@ -107,7 +128,22 @@ func matchParamEqual(param1 []int32, param2 []int32, num int) bool {
 	return true
 }
 
-// AcceptQuest 接取任务
+// AcceptQuest 接取任务（核心入口 全表扫描所有 quest 检查接取条件）
+//
+// 处理：
+//  1. 遍历 gdconf.GetQuestDataMap() 全部 quest（数千个）
+//  2. 跳过玩家已有的 quest
+//  3. 检查每个 AcceptCond（仅支持 STATE_EQUAL/STATE_NOT_EQUAL）
+//  4. 按 AcceptCondCompose 组合多个条件结果（AND/OR/A_AND_ETCOR/A_OR_ETCAND/...）
+//  5. 满足条件 → dbQuest.AddQuest 加入玩家档 → StartQuest
+//
+// **特殊hack**（line 240）：风龙任务 35722 一接受就立即 finish
+//
+//	原因：进风龙秘境客户端会无限重连 作者绕过此问题的暴力方案
+//
+// 性能：每次玩家行为都可能触发 AcceptQuest 全表扫描（任务条件依赖其他任务状态）
+//
+//	EndlessLoopCheck 防止递归（任务A接受→触发任务B接受→触发任务C接受→...）
 func (g *Game) AcceptQuest(player *model.Player, notify bool) {
 	g.EndlessLoopCheck(EndlessLoopCheckTypeAcceptQuest)
 	dbQuest := player.GetDbQuest()
@@ -263,7 +299,15 @@ func (g *Game) AcceptQuest(player *model.Player, notify bool) {
 	}
 }
 
-// StartQuest 开始任务
+// StartQuest 开始任务（任务接取后立即调用）
+//
+// 处理：
+//  1. dbQuest.StartQuest 改任务状态为进行中
+//  2. ExecQuest(QuestExecTypeStart) 执行 StartExecList（解锁场景物件/创建临时怪等）
+//  3. QuestStartTriggerCheck 通知场景内的 Lua trigger（QUEST_START 类型）
+//  4. 通知客户端 QuestListUpdateNotify
+//  5. 章节起始任务 → 发 ChapterStateNotify(BEGIN) 让客户端展示"开始新章节"动画
+//  6. 主动 TriggerQuest 每个 finishCond 类型 → 立即检查是否任务一接就完成
 func (g *Game) StartQuest(player *model.Player, questId uint32, notify bool) {
 	g.EndlessLoopCheck(EndlessLoopCheckTypeStartQuest)
 	dbQuest := player.GetDbQuest()
@@ -297,7 +341,23 @@ func (g *Game) StartQuest(player *model.Player, questId uint32, notify bool) {
 	}
 }
 
-// ExecQuest 执行任务
+// ExecQuest 执行任务的副作用列表（开始/失败/完成时的 hooks）
+//
+// 三种 ExecType 对应不同的执行列表：
+//   - QuestExecTypeStart  → StartExecList（任务开始时执行 如解锁场景物件）
+//   - QuestExecTypeFail   → FailExecList（任务失败时执行 如清理临时怪）
+//   - QuestExecTypeFinish → ExecList（任务完成时执行 如发奖励/解锁后续）
+//
+// 已实现的 12+ 种 ExecType（与 CLAUDE.md 任务系统章节一致）：
+//   - NOTIFY_GROUP_LUA: 通知场景 Lua（实际是空操作 仅占位）
+//   - REFRESH_GROUP_SUITE: 刷新场景小组（如打完守卫怪 宝箱出现）
+//   - SET_OPEN_STATE: 设置游戏功能开放状态（解锁角色卡池/秘境/活动等）
+//   - UNLOCK_POINT/UNLOCK_AREA: 解锁传送点/区域
+//   - CHANGE_AVATAR_ELEMET: 改主角元素（七国元素切换 任务驱动）
+//   - SET_IS_FLYABLE/SET_IS_WEATHER_LOCKED/SET_IS_GAME_TIME_LOCKED/SET_IS_TRANSFERABLE: 各种状态锁
+//   - SET_GAME_TIME: 设置游戏时间（强制白天/晚上）
+//   - ROLLBACK_QUEST: 回滚任务（失败任务恢复到未开始）
+//   - ADD_CUR_AVATAR_ENERGY: 给当前角色加满能量（剧情大招过场前用）
 func (g *Game) ExecQuest(player *model.Player, questId uint32, questExecType int) {
 	g.EndlessLoopCheck(EndlessLoopCheckTypeExecQuest)
 	questDataConfig := gdconf.GetQuestDataById(int32(questId))
@@ -435,13 +495,23 @@ func (g *Game) ExecQuest(player *model.Player, questId uint32, questExecType int
 			player.PropMap[constant.PLAYER_PROP_IS_TRANSFERABLE] = uint32(value)
 			g.SendMsg(cmd.PlayerPropNotify, player.PlayerId, player.ClientSeq, g.PacketPlayerPropNotify(player, constant.PLAYER_PROP_IS_TRANSFERABLE))
 		case constant.QUEST_EXEC_TYPE_SET_GAME_TIME:
-			// 设置游戏时间
+			// 设置游戏时间到某时刻（剧情常用 跳到下一个目标时刻 保持累计语义）
+			// 参数格式："HH" 或 "HH.MM"（小数点分隔 分钟前导 0 省略 如 "17.4"=17:04 "17.45"=17:45）
 			if len(questExec.Param) != 1 {
 				continue
 			}
-			hour, err := strconv.Atoi(questExec.Param[0])
+			var hour, minute int
+			var err error
+			parts := strings.Split(questExec.Param[0], ".")
+			hour, err = strconv.Atoi(parts[0])
 			if err != nil {
 				continue
+			}
+			if len(parts) == 2 {
+				minute, err = strconv.Atoi(parts[1])
+				if err != nil {
+					continue
+				}
 			}
 			world := WORLD_MANAGER.GetWorldById(player.WorldId)
 			if world == nil {
@@ -453,7 +523,17 @@ func (g *Game) ExecQuest(player *model.Player, questId uint32, questExecType int
 				logger.Error("scene is nil, sceneId: %v, uid: %v", player.GetSceneId(), player.PlayerId)
 				continue
 			}
-			g.ChangeGameTime(world, uint32(hour*60))
+			// 累计秒数 mod 86400 得当天已过秒数 跳到下一个目标时刻（已过则跳到明天）
+			curSec := world.GetGameTime()
+			secOfDay := curSec % 86400
+			targetSecOfDay := uint32(hour*3600 + minute*60)
+			var newSec uint32
+			if targetSecOfDay >= secOfDay {
+				newSec = curSec - secOfDay + targetSecOfDay
+			} else {
+				newSec = curSec - secOfDay + targetSecOfDay + 86400
+			}
+			g.ChangeGameTime(world, newSec)
 		case constant.QUEST_EXEC_TYPE_ROLLBACK_QUEST:
 			// 回滚任务
 			if len(questExec.Param) != 1 {
@@ -485,7 +565,22 @@ func (g *Game) ExecQuest(player *model.Player, questId uint32, questExecType int
 	}
 }
 
-// TriggerQuest 触发任务
+// TriggerQuest 触发任务推进（核心入口 玩家行为 + Lua trigger 都最终走这里）
+//
+// 调用方式：TriggerQuest(player, COND_TYPE_KILL_MONSTER, "", monsterId)
+//   - cond: 条件类型（QUEST_FINISH_COND_TYPE_*）
+//   - complexParam: 复杂字符串参数（如时间范围 "8,18"）
+//   - param: 整数参数列表（最多 2 个 用 matchParamEqual 比对）
+//
+// 处理：
+//  1. 遍历玩家所有进行中任务 检查每个 quest 的 FailCondList + FinishCondList
+//  2. 条件匹配 → AddQuestFinishCount（计数器+1） 或 FailQuest
+//  3. CheckQuestFinish 判断任务是否完成（计数器到达阈值）
+//  4. 通知客户端 + 触发 FinishQuest/FailQuest 钩子
+//  5. 链式触发 AcceptQuest（完成任务可能解锁后续任务）+ TriggerOpenState（解锁功能）
+//
+// 已实现的 14+ 种 finishCond.Type 见 case 列表（COMPLETE_TALK / KILL_MONSTER / OBTAIN_ITEM / 进场景 / 时间窗口 等）
+// 注释里 line 653 的吐槽体现作者对配置不确定性的无奈
 func (g *Game) TriggerQuest(player *model.Player, cond int32, complexParam string, param ...int32) {
 	g.EndlessLoopCheck(EndlessLoopCheckTypeTriggerQuest)
 	dbQuest := player.GetDbQuest()
@@ -532,14 +627,14 @@ func (g *Game) TriggerQuest(player *model.Player, cond int32, complexParam strin
 				if !ok {
 					continue
 				}
-				dbQuest.AddQuestFinishCount(quest.QuestId, index)
+				dbQuest.AddQuestFinishCount(quest.QuestId, index, 1)
 			case constant.QUEST_FINISH_COND_TYPE_TRIGGER_FIRE:
 				// 场景触发器跳了 参数1:触发器id
 				ok := matchParamEqual(finishCond.Param, param, 1)
 				if !ok {
 					continue
 				}
-				dbQuest.AddQuestFinishCount(quest.QuestId, index)
+				dbQuest.AddQuestFinishCount(quest.QuestId, index, 1)
 			case constant.QUEST_FINISH_COND_TYPE_UNLOCK_TRANS_POINT:
 				// 解锁传送锚点 参数1:场景id 参数2:传送锚点id
 				dbWorld := player.GetDbWorld()
@@ -551,34 +646,38 @@ func (g *Game) TriggerQuest(player *model.Player, cond int32, complexParam strin
 				if !unlock {
 					continue
 				}
-				dbQuest.AddQuestFinishCount(quest.QuestId, index)
+				dbQuest.AddQuestFinishCount(quest.QuestId, index, 1)
 			case constant.QUEST_FINISH_COND_TYPE_COMPLETE_TALK:
 				// 与NPC对话 参数1:对话id
 				ok := matchParamEqual(finishCond.Param, param, 1)
 				if !ok {
 					continue
 				}
-				dbQuest.AddQuestFinishCount(quest.QuestId, index)
+				dbQuest.AddQuestFinishCount(quest.QuestId, index, 1)
 			case constant.QUEST_FINISH_COND_TYPE_LUA_NOTIFY:
 				// LUA侧通知 复杂参数
 				if finishCond.ComplexParam != complexParam {
 					continue
 				}
-				dbQuest.AddQuestFinishCount(quest.QuestId, index)
+				dbQuest.AddQuestFinishCount(quest.QuestId, index, 1)
 			case constant.QUEST_FINISH_COND_TYPE_SKILL:
 				// 使用技能 参数1:技能id
 				ok := matchParamEqual(finishCond.Param, param, 1)
 				if !ok {
 					continue
 				}
-				dbQuest.AddQuestFinishCount(quest.QuestId, index)
+				dbQuest.AddQuestFinishCount(quest.QuestId, index, 1)
 			case constant.QUEST_FINISH_COND_TYPE_OBTAIN_ITEM:
-				// 获得道具 参数1:道具id
+				// 获得道具 参数1:道具id 调用方在 param[1] 传入实际获得件数
 				ok := matchParamEqual(finishCond.Param, param, 1)
 				if !ok {
 					continue
 				}
-				dbQuest.AddQuestFinishCount(quest.QuestId, index)
+				addCount := uint32(1)
+				if len(param) >= 2 && param[1] > 0 {
+					addCount = uint32(param[1])
+				}
+				dbQuest.AddQuestFinishCount(quest.QuestId, index, addCount)
 			case constant.QUEST_FINISH_COND_TYPE_UNLOCK_AREA:
 				// 解锁场景区域 参数1:场景id 参数2:场景区域id
 				dbWorld := player.GetDbWorld()
@@ -590,7 +689,7 @@ func (g *Game) TriggerQuest(player *model.Player, cond int32, complexParam strin
 				if !unlock {
 					continue
 				}
-				dbQuest.AddQuestFinishCount(quest.QuestId, index)
+				dbQuest.AddQuestFinishCount(quest.QuestId, index, 1)
 			case constant.QUEST_FINISH_COND_TYPE_ADD_QUEST_PROGRESS:
 				// TODO 这你妈到底是加父任务的进度还是子任务的进度
 				continue
@@ -600,21 +699,21 @@ func (g *Game) TriggerQuest(player *model.Player, cond int32, complexParam strin
 				if !ok {
 					continue
 				}
-				dbQuest.AddQuestFinishCount(quest.QuestId, index)
+				dbQuest.AddQuestFinishCount(quest.QuestId, index, 1)
 			case constant.QUEST_FINISH_COND_TYPE_ENTER_MY_WORLD:
 				// 进入世界 参数1:场景id
 				ok := matchParamEqual(finishCond.Param, param, 1)
 				if !ok {
 					continue
 				}
-				dbQuest.AddQuestFinishCount(quest.QuestId, index)
+				dbQuest.AddQuestFinishCount(quest.QuestId, index, 1)
 			case constant.QUEST_FINISH_COND_TYPE_ENTER_ROOM:
 				// 进入房间 参数1:场景id
 				ok := matchParamEqual(finishCond.Param, param, 1)
 				if !ok {
 					continue
 				}
-				dbQuest.AddQuestFinishCount(quest.QuestId, index)
+				dbQuest.AddQuestFinishCount(quest.QuestId, index, 1)
 			case constant.QUEST_FINISH_COND_TYPE_GAME_TIME_TICK:
 				// 游戏时间
 				split := strings.Split(finishCond.ComplexParam, ",")
@@ -636,11 +735,19 @@ func (g *Game) TriggerQuest(player *model.Player, cond int32, complexParam strin
 					continue
 				}
 				gameTime := world.GetGameTime()
-				gameTimeHour := gameTime / 60
-				if gameTimeHour < startGameTimeHour || gameTimeHour > endGameTimeHour {
+				// game_time 是累计秒数 mod 86400 算当天小时
+				gameTimeHour := (gameTime % 86400) / 3600
+				// 跨午夜区间如 "22,6" 表示 22 点至次日 6 点
+				var inRange bool
+				if startGameTimeHour <= endGameTimeHour {
+					inRange = gameTimeHour >= startGameTimeHour && gameTimeHour <= endGameTimeHour
+				} else {
+					inRange = gameTimeHour >= startGameTimeHour || gameTimeHour <= endGameTimeHour
+				}
+				if !inRange {
 					continue
 				}
-				dbQuest.AddQuestFinishCount(quest.QuestId, index)
+				dbQuest.AddQuestFinishCount(quest.QuestId, index, 1)
 			default:
 				logger.Error("not support quest finish cond type: %v, questId: %v, uid: %v", cond, quest.QuestId, player.PlayerId)
 			}

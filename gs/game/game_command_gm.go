@@ -14,6 +14,25 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
+// GMCmd GM 函数集合（系统函数 GM + HTTP 后台 + 客户端 GmTalk @@ 格式 三种入口共用）
+//
+// 与 game_command_controller.go 的玩家聊天命令的关系：
+//   - controller 是给玩家用的（通过私聊"小可爱"输入"item add 1234 5"等）
+//     底层调 GMCmd.GMAddItem 等方法
+//   - GMCmd 是给开发者/运维用的 通过反射调用（CallGMCmd）
+//     方法名约定 GMxxx 参数只能是基本类型（int/uint8/float64/bool/string）
+//
+// 命名规则：
+//   - GMxxx：常规 GM 命令（操作玩家档/场景）
+//   - 无前缀：特殊用途（如 ChangePlayerCmdPerm/ReloadGameDataConfig/CreateRobotInAiWorld 等）
+//
+// 调用示例：
+//   - HTTP: POST /gm/cmd { funcName: "GMAddItem", paramList: ["100000001", "1234", "5"] }
+//   - 客户端 GmTalk: "@@GMAddItem(100000001,1234,5)"
+//
+// **GMClearItem 等危险操作**：会调 LogoutPlayer 强制玩家下线（避免数据不一致）
+//   清掉 DbItem 后强制重登 让玩家重新加载干净的存档
+
 // GM函数模块
 // GM函数只支持基本类型的简单参数传入
 
@@ -40,17 +59,41 @@ func (g *GMCmd) GMTeleportPlayer(userId, sceneId uint32, posX, posY, posZ float6
 	)
 }
 
-// GMAddItem 添加玩家道具
+// GMAddItem 添加道具
 func (g *GMCmd) GMAddItem(userId, itemId, itemCount uint32) {
 	GAME.AddPlayerItem(userId, []*ChangeItem{{ItemId: itemId, ChangeCount: itemCount}}, proto.ActionReasonType_ACTION_REASON_GM)
 }
 
-// GMCostItem 消耗玩家道具
+// GMAddAllItem 添加所有道具
+func (g *GMCmd) GMAddAllItem(userId uint32, itemCount uint32) {
+	GAME.LogoutPlayer(userId)
+	itemList := make([]*ChangeItem, 0)
+	for itemId := range GAME.GetAllItemDataConfig() {
+		itemList = append(itemList, &ChangeItem{
+			ItemId:      uint32(itemId),
+			ChangeCount: itemCount,
+		})
+	}
+	GAME.AddPlayerItem(userId, itemList, proto.ActionReasonType_ACTION_REASON_GM)
+}
+
+// GMCostItem 消耗道具
 func (g *GMCmd) GMCostItem(userId, itemId, itemCount uint32) {
 	GAME.CostPlayerItem(userId, []*ChangeItem{{ItemId: itemId, ChangeCount: itemCount}})
 }
 
-// GMAddWeapon 添加玩家武器
+// GMClearItem 清除全部道具
+func (g *GMCmd) GMClearItem(userId uint32) {
+	player := USER_MANAGER.GetOnlineUser(userId)
+	if player == nil {
+		logger.Error("player is nil, uid: %v", userId)
+		return
+	}
+	player.DbItem = nil
+	GAME.LogoutPlayer(userId)
+}
+
+// GMAddWeapon 添加武器
 func (g *GMCmd) GMAddWeapon(userId, itemId, itemCount uint32, level, promote, refinement uint8) {
 	// 武器数量
 	for i := uint32(0); i < itemCount; i++ {
@@ -80,16 +123,63 @@ func (g *GMCmd) GMAddWeapon(userId, itemId, itemCount uint32, level, promote, re
 	}
 }
 
-// GMAddReliquary 添加玩家圣遗物
-func (g *GMCmd) GMAddReliquary(userId, itemId, itemCount uint32) {
-	// 圣遗物数量
-	for i := uint32(0); i < itemCount; i++ {
-		// 添加圣遗物
-		GAME.AddPlayerReliquary(userId, itemId)
+// GMAddAllWeapon 添加所有武器
+func (g *GMCmd) GMAddAllWeapon(userId, itemCount uint32, level, promote, refinement uint8) {
+	for itemId := range GAME.GetAllWeaponDataConfig() {
+		g.GMAddWeapon(userId, uint32(itemId), itemCount, level, promote, refinement)
 	}
 }
 
-// GMAddAvatar 添加玩家角色
+// GMClearWeapon 清除全部武器
+func (g *GMCmd) GMClearWeapon(userId uint32) {
+	player := USER_MANAGER.GetOnlineUser(userId)
+	if player == nil {
+		logger.Error("player is nil, uid: %v", userId)
+		return
+	}
+	dbWeapon := player.GetDbWeapon()
+	for _, weapon := range dbWeapon.GetWeaponMap() {
+		if weapon.AvatarId == 0 {
+			dbWeapon.CostWeapon(player, weapon.WeaponId)
+		}
+	}
+	GAME.LogoutPlayer(userId)
+}
+
+// GMAddReliquary 添加圣遗物
+func (g *GMCmd) GMAddReliquary(userId, itemId, itemCount, mainPropId uint32, appendPropIdList []uint32) {
+	// 圣遗物数量
+	for i := uint32(0); i < itemCount; i++ {
+		// 添加圣遗物
+		GAME.AddPlayerReliquary(userId, itemId, mainPropId, appendPropIdList)
+	}
+}
+
+// GMAddAllReliquary 添加所有圣遗物
+func (g *GMCmd) GMAddAllReliquary(userId, itemCount uint32) {
+	GAME.LogoutPlayer(userId)
+	for itemId := range GAME.GetAllReliquaryDataConfig() {
+		g.GMAddReliquary(userId, uint32(itemId), itemCount, 0, nil)
+	}
+}
+
+// GMClearReliquary 清除全部圣遗物
+func (g *GMCmd) GMClearReliquary(userId uint32) {
+	player := USER_MANAGER.GetOnlineUser(userId)
+	if player == nil {
+		logger.Error("player is nil, uid: %v", userId)
+		return
+	}
+	dbReliquary := player.GetDbReliquary()
+	for _, reliquary := range dbReliquary.GetReliquaryMap() {
+		if reliquary.AvatarId == 0 {
+			dbReliquary.CostReliquary(player, reliquary.ReliquaryId)
+		}
+	}
+	GAME.LogoutPlayer(userId)
+}
+
+// GMAddAvatar 添加角色
 func (g *GMCmd) GMAddAvatar(userId, avatarId uint32, level, promote uint8) {
 	// 添加角色
 	GAME.AddPlayerAvatar(userId, avatarId)
@@ -115,38 +205,28 @@ func (g *GMCmd) GMAddAvatar(userId, avatarId uint32, level, promote uint8) {
 	GAME.SendMsg(cmd.AvatarPropNotify, player.PlayerId, player.ClientSeq, GAME.PacketAvatarPropNotify(avatar))
 }
 
-// GMAddAllItem 添加玩家所有道具
-func (g *GMCmd) GMAddAllItem(userId uint32, itemCount uint32) {
-	GAME.LogoutPlayer(userId)
-	itemList := make([]*ChangeItem, 0)
-	for itemId := range GAME.GetAllItemDataConfig() {
-		itemList = append(itemList, &ChangeItem{
-			ItemId:      uint32(itemId),
-			ChangeCount: itemCount,
-		})
-	}
-	GAME.AddPlayerItem(userId, itemList, proto.ActionReasonType_ACTION_REASON_GM)
-}
-
-// GMAddAllWeapon 添加玩家所有武器
-func (g *GMCmd) GMAddAllWeapon(userId, itemCount uint32, level, promote, refinement uint8) {
-	for itemId := range GAME.GetAllWeaponDataConfig() {
-		g.GMAddWeapon(userId, uint32(itemId), itemCount, level, promote, refinement)
-	}
-}
-
-// GMAddAllReliquary 添加玩家所有圣遗物
-func (g *GMCmd) GMAddAllReliquary(userId, itemCount uint32) {
-	GAME.LogoutPlayer(userId)
-	for itemId := range GAME.GetAllReliquaryDataConfig() {
-		g.GMAddReliquary(userId, uint32(itemId), itemCount)
-	}
-}
-
-// GMAddAllAvatar 添加玩家所有角色
+// GMAddAllAvatar 添加所有角色
 func (g *GMCmd) GMAddAllAvatar(userId uint32, level, promote uint8) {
 	for avatarId := range GAME.GetAllAvatarDataConfig() {
 		g.GMAddAvatar(userId, uint32(avatarId), level, promote)
+	}
+}
+
+// GMDelAvatar 删除角色
+func (g *GMCmd) GMDelAvatar(userId, avatarId uint32) {
+	GAME.DelPlayerAvatar(userId, avatarId)
+}
+
+// GMDelAllAvatar 删除所有角色
+func (g *GMCmd) GMDelAllAvatar(userId uint32) {
+	player := USER_MANAGER.GetOnlineUser(userId)
+	if player == nil {
+		logger.Error("player is nil, uid: %v", userId)
+		return
+	}
+	dbAvatar := player.GetDbAvatar()
+	for _, avatar := range dbAvatar.GetAvatarMap() {
+		g.GMDelAvatar(userId, avatar.AvatarId)
 	}
 }
 
@@ -167,7 +247,7 @@ func (g *GMCmd) GMKillSelf(userId uint32) {
 	GAME.SubPlayerAvatarHp(player.PlayerId, activeAvatarId, 0.0, 1.0, proto.ChangHpReason_CHANGE_HP_SUB_GM)
 }
 
-// GMKillMonster 杀死某个怪物
+// GMKillMonster 杀死指定怪物
 func (g *GMCmd) GMKillMonster(userId uint32, entityId uint32) {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {
@@ -282,6 +362,21 @@ func (g *GMCmd) GMForceFinishAllQuest(userId uint32) {
 		ntf.QuestList = append(ntf.QuestList, pbQuest)
 	}
 	GAME.SendMsg(cmd.QuestListUpdateNotify, player.PlayerId, player.ClientSeq, ntf)
+}
+
+// GMClearQuest 清除全部任务
+func (g *GMCmd) GMClearQuest(userId uint32) {
+	player := USER_MANAGER.GetOnlineUser(userId)
+	if player == nil {
+		logger.Error("player is nil, uid: %v", userId)
+		return
+	}
+	player.DbQuest = nil
+	player.SceneId = 3
+	player.Pos = &model.Vector{X: 2747, Y: 194, Z: -1719}
+	player.Rot = &model.Vector{X: 0, Y: 307, Z: 0}
+	GAME.AcceptQuest(player, false)
+	GAME.LogoutPlayer(userId)
 }
 
 // GMUnlockPoint 解锁场景锚点
@@ -442,43 +537,6 @@ func (g *GMCmd) GMClearPlayer(userId uint32) {
 	GAME.LogoutPlayer(userId)
 }
 
-// GMClearItem 清除全部道具
-func (g *GMCmd) GMClearItem(userId uint32) {
-	player := USER_MANAGER.GetOnlineUser(userId)
-	if player == nil {
-		logger.Error("player is nil, uid: %v", userId)
-		return
-	}
-	player.DbItem = nil
-	GAME.LogoutPlayer(userId)
-}
-
-// GMClearReliquary 清除全部圣遗物
-func (g *GMCmd) GMClearReliquary(userId uint32) {
-	player := USER_MANAGER.GetOnlineUser(userId)
-	if player == nil {
-		logger.Error("player is nil, uid: %v", userId)
-		return
-	}
-	player.DbReliquary = nil
-	GAME.LogoutPlayer(userId)
-}
-
-// GMClearQuest 清除全部任务
-func (g *GMCmd) GMClearQuest(userId uint32) {
-	player := USER_MANAGER.GetOnlineUser(userId)
-	if player == nil {
-		logger.Error("player is nil, uid: %v", userId)
-		return
-	}
-	player.DbQuest = nil
-	player.SceneId = 3
-	player.Pos = &model.Vector{X: 2747, Y: 194, Z: -1719}
-	player.Rot = &model.Vector{X: 0, Y: 307, Z: 0}
-	GAME.AcceptQuest(player, false)
-	GAME.LogoutPlayer(userId)
-}
-
 // GMClearWorld 清除大世界数据
 func (g *GMCmd) GMClearWorld(userId uint32) {
 	player := USER_MANAGER.GetOnlineUser(userId)
@@ -500,6 +558,16 @@ func (g *GMCmd) GMNotSave(userId uint32) {
 	player.NotSave = true
 }
 
+// GMSetOpenState 设置功能开放状态
+func (g *GMCmd) GMSetOpenState(userId uint32, openStateId uint32, value uint32) {
+	player := USER_MANAGER.GetOnlineUser(userId)
+	if player == nil {
+		logger.Error("player is nil, uid: %v", userId)
+		return
+	}
+	player.OpenStateMap[openStateId] = value
+}
+
 // GMSetAllOpenState 设置全部功能开放状态
 func (g *GMCmd) GMSetAllOpenState(userId uint32, value uint32) {
 	player := USER_MANAGER.GetOnlineUser(userId)
@@ -511,16 +579,6 @@ func (g *GMCmd) GMSetAllOpenState(userId uint32, value uint32) {
 		player.OpenStateMap[uint32(openStateData.OpenStateId)] = value
 	}
 	GAME.LogoutPlayer(userId)
-}
-
-// GMSetOpenState 设置功能开放状态
-func (g *GMCmd) GMSetOpenState(userId uint32, openStateId uint32, value uint32) {
-	player := USER_MANAGER.GetOnlineUser(userId)
-	if player == nil {
-		logger.Error("player is nil, uid: %v", userId)
-		return
-	}
-	player.OpenStateMap[openStateId] = value
 }
 
 // GMAddAllSceneTag 解锁全部场景标签
@@ -541,9 +599,26 @@ func (g *GMCmd) GMAddAllSceneTag(userId uint32, sceneId uint32) {
 			dbScene.AddSceneTag(uint32(sceneTagDataConfig.SceneTagId))
 		}
 	}
+	if sceneId == player.GetSceneId() {
+		GAME.SendMsg(cmd.SceneDataNotify, player.PlayerId, player.ClientSeq, &proto.SceneDataNotify{
+			LevelConfigNameList: nil,
+			SceneTagIdList:      dbScene.GetSceneTagList(),
+		})
+	}
 }
 
-// GMFreeMode 自由探索模式
+// GMFreeMode 自由探索模式（一键开放全图）
+//
+// 开启的内容：
+//   - 允许飞行（PROP_IS_FLYABLE=1）
+//   - 允许传送（PROP_IS_TRANSFERABLE=1）
+//   - 解除天气/时间锁
+//   - 允许潜水 + 满潜水耐力
+//   - 开启多人模式（PROP_IS_MP_MODE_AVAILABLE=1）
+//   - 解锁鲜肉/全球区域 + 多人世界 OpenState
+//   - 解锁场景 ID=3（须弥/枫丹等？）的全部传送点 + 区域
+//
+// 用于"我只想四处看看不打主线"的场景 一键解锁所有探索能力
 func (g *GMCmd) GMFreeMode(userId uint32) {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {
@@ -584,7 +659,7 @@ func (g *GMCmd) GMChangeSkillDepot(userId uint32, skillDepotId uint32) {
 	GAME.ChangePlayerAvatarSkillDepot(player.PlayerId, world.GetPlayerActiveAvatarId(player), skillDepotId, 0)
 }
 
-// GMSetPlayerWuDi 开启关闭玩家角色无敌
+// GMSetPlayerWuDi 开启关闭角色无敌
 func (g *GMCmd) GMSetPlayerWuDi(userId uint32, open bool) {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {
@@ -609,7 +684,7 @@ func (g *GMCmd) GMSetMonsterWudi(userId uint32, open bool) {
 	scene.SetMonsterWudi(open)
 }
 
-// GMSetPlayerEnergyInf 开启关闭玩家角色无限能量
+// GMSetPlayerEnergyInf 开启关闭角色无限能量
 func (g *GMCmd) GMSetPlayerEnergyInf(userId uint32, open bool) {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {
@@ -627,7 +702,7 @@ func (g *GMCmd) GMSetPlayerEnergyInf(userId uint32, open bool) {
 	}
 }
 
-// GMSetPlayerStaminaInf 开启关闭玩家无限耐力
+// GMSetPlayerStaminaInf 开启关闭角色无限耐力
 func (g *GMCmd) GMSetPlayerStaminaInf(userId uint32, open bool) {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {
@@ -637,7 +712,7 @@ func (g *GMCmd) GMSetPlayerStaminaInf(userId uint32, open bool) {
 	player.StaminaInf = open
 }
 
-// GMSetPlayerNoCd 开启关闭玩家无冷却
+// GMSetPlayerNoCd 开启关闭角色无冷却
 func (g *GMCmd) GMSetPlayerNoCd(userId uint32, open bool) {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {
@@ -655,8 +730,121 @@ func (g *GMCmd) GMSetPlayerNoCd(userId uint32, open bool) {
 	}
 }
 
+// GMSetTalentUnlock 解锁锁定角色命座
+func (g *GMCmd) GMSetTalentUnlock(userId uint32, talentId uint32, unlock bool) {
+	player := USER_MANAGER.GetOnlineUser(userId)
+	if player == nil {
+		logger.Error("player is nil, uid: %v", userId)
+		return
+	}
+	world := WORLD_MANAGER.GetWorldById(player.WorldId)
+	if world == nil {
+		logger.Error("world is nil, worldId: %v, uid: %v", player.WorldId, player.PlayerId)
+		return
+	}
+	activeAvatarId := world.GetPlayerActiveAvatarId(player)
+	dbAvatar := player.GetDbAvatar()
+	avatar := dbAvatar.GetAvatarById(activeAvatarId)
+	if talentId == 0 {
+		if unlock {
+			avatarSkillDepotDataConfig := gdconf.GetAvatarSkillDepotDataById(int32(avatar.SkillDepotId))
+			if avatarSkillDepotDataConfig == nil {
+				logger.Error("avatar skill depot data config is nil, skillDepotId: %v", avatar.SkillDepotId)
+				return
+			}
+			avatar.TalentIdList = make([]uint32, 0)
+			entityId := world.GetPlayerWorldAvatarEntityId(player, avatar.AvatarId)
+			for _, v := range avatarSkillDepotDataConfig.Talents {
+				avatar.TalentIdList = append(avatar.TalentIdList, uint32(v))
+				ntf := &proto.AvatarUnlockTalentNotify{
+					EntityId:     entityId,
+					AvatarGuid:   avatar.Guid,
+					TalentId:     uint32(v),
+					SkillDepotId: avatar.SkillDepotId,
+				}
+				GAME.SendMsg(cmd.AvatarUnlockTalentNotify, player.PlayerId, player.ClientSeq, ntf)
+			}
+		} else {
+			avatar.TalentIdList = make([]uint32, 0)
+			GAME.LogoutPlayer(userId)
+		}
+	} else {
+		if unlock {
+			for _, v := range avatar.TalentIdList {
+				if v == talentId {
+					return
+				}
+			}
+			entityId := world.GetPlayerWorldAvatarEntityId(player, avatar.AvatarId)
+			avatar.TalentIdList = append(avatar.TalentIdList, talentId)
+			ntf := &proto.AvatarUnlockTalentNotify{
+				EntityId:     entityId,
+				AvatarGuid:   avatar.Guid,
+				TalentId:     talentId,
+				SkillDepotId: avatar.SkillDepotId,
+			}
+			GAME.SendMsg(cmd.AvatarUnlockTalentNotify, player.PlayerId, player.ClientSeq, ntf)
+		} else {
+			newTalentIdList := make([]uint32, 0)
+			for _, v := range avatar.TalentIdList {
+				if v == talentId {
+					continue
+				}
+				newTalentIdList = append(newTalentIdList, v)
+			}
+			avatar.TalentIdList = newTalentIdList
+			GAME.LogoutPlayer(userId)
+		}
+	}
+}
+
+// GMSetPlayerLevelExp 设置玩家冒险等级与经验
+func (g *GMCmd) GMSetPlayerLevelExp(userId uint32, level uint32, exp uint32) {
+	player := USER_MANAGER.GetOnlineUser(userId)
+	if player == nil {
+		logger.Error("player is nil, uid: %v", userId)
+		return
+	}
+	GAME.SetPlayerLevelExp(userId, level, exp)
+}
+
+// GMSetPlayerAvatarLevelExp 设置玩家当前角色等级经验
+func (g *GMCmd) GMSetPlayerAvatarLevelExp(userId uint32, level uint8, exp uint32) {
+	player := USER_MANAGER.GetOnlineUser(userId)
+	if player == nil {
+		logger.Error("player is nil, uid: %v", userId)
+		return
+	}
+	world := WORLD_MANAGER.GetWorldById(player.WorldId)
+	if world == nil {
+		logger.Error("world is nil, worldId: %v, uid: %v", player.WorldId, player.PlayerId)
+		return
+	}
+	activeAvatarId := world.GetPlayerActiveAvatarId(player)
+	GAME.SetPlayerAvatarLevelExpPromote(userId, activeAvatarId, level, exp)
+}
+
+// GMSetPlayerAvatarPromote 设置玩家当前角色突破
+func (g *GMCmd) GMSetPlayerAvatarPromote(userId uint32, promote uint8) {
+	player := USER_MANAGER.GetOnlineUser(userId)
+	if player == nil {
+		logger.Error("player is nil, uid: %v", userId)
+		return
+	}
+	world := WORLD_MANAGER.GetWorldById(player.WorldId)
+	if world == nil {
+		logger.Error("world is nil, worldId: %v, uid: %v", player.WorldId, player.PlayerId)
+		return
+	}
+	activeAvatarId := world.GetPlayerActiveAvatarId(player)
+	GAME.SetPlayerAvatarLevelExpPromote(userId, activeAvatarId, 0, 0, promote)
+}
+
 // 系统级GM指令
 
+// ChangePlayerCmdPerm 修改玩家命令权限等级（让普通玩家成为 GM）
+// 使用场景：服主想给某玩家临时 GM 权限做测试 调一次后该玩家就能用 GM 命令了
+// 权限级别：CommandPermNormal(0) → CommandPermGM(1)
 func (g *GMCmd) ChangePlayerCmdPerm(userId uint32, cmdPerm uint8) {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {
@@ -666,6 +854,9 @@ func (g *GMCmd) ChangePlayerCmdPerm(userId uint32, cmdPerm uint8) {
 	player.CmdPerm = cmdPerm
 }
 
+// ReloadGameDataConfig 热重载游戏数据配置（不停服更新配置）
+// 通过 LocalEvent 异步处理：goroutine 加载新配置到 CONF_RELOAD → 主循环原子替换
+// reloadSceneLua=true 同时重载场景 Lua（耗时较长 数万 group lua 文件全部重新解析）
 func (g *GMCmd) ReloadGameDataConfig(reloadSceneLua bool) {
 	LOCAL_EVENT_MANAGER.GetLocalEventChan() <- &LocalEvent{
 		EventId: ReloadGameDataConfig,
@@ -673,6 +864,14 @@ func (g *GMCmd) ReloadGameDataConfig(reloadSceneLua bool) {
 	}
 }
 
+// XLuaDebug 玩家客户端远程执行 Lua bytecode（详见 CLAUDE.md "客户端 Lua 远程执行"）
+//
+// **危险能力**：客户端 XLua 权限非常高 能直接操作 UI 树/调用 C# API
+// 玩家必须主动开启 player.XLuaDebug = true 才允许执行（避免被滥用）
+// luacBase64 必须是用 docs/luac.exe.win 编译的魔改 bytecode（标准 Lua 不能用）
+//
+// 用途：调试 PUBG 玩法 UI / 远程修复客户端 bug
+// 注释提到"之前有人拿这个干坏事"——这是个 hack 性质的能力 慎用
 func (g *GMCmd) XLuaDebug(userId uint32, luacBase64 string) {
 	logger.Debug("xlua debug, uid: %v, luac: %v", userId, luacBase64)
 	player := USER_MANAGER.GetOnlineUser(userId)
@@ -720,6 +919,11 @@ func (g *GMCmd) AvStopMidiInputDev() {
 	logger.Info("stop midi input dev ok")
 }
 
+// AvUpdateFrame JPEG 像素屏渲染（详见 CLAUDE.md "玩法实现状态" 中的 JPEG 像素屏）
+//
+// 80×80 像素 用 7 色 gadget 在 AI 世界场景 3 摆出彩色图片
+// 默认坐标（2700, 200, -1800）是作者预留的空地坐标
+// 玩具性质 但说明项目可以做出"用游戏世界做显示器"这种创意玩法
 func (g *GMCmd) AvUpdateFrame(fileDataBase64 string, rgb bool, posX, posY, posZ float64) {
 	fileData, err := base64.StdEncoding.DecodeString(fileDataBase64)
 	if err != nil {
@@ -733,6 +937,14 @@ func (g *GMCmd) AvUpdateFrame(fileDataBase64 string, rgb bool, posX, posY, posZ 
 	UpdateFrame(fileData, basePos, rgb)
 }
 
+// CreateRobotInAiWorld 在 AI 世界中创建机器人玩家（**空壳实现**）
+//
+// 创建一个假玩家 + 加入 AI 世界 + 走完整四步状态机
+// **没有 AI 行为**：机器人创建后不会移动/打怪/吃鸡 仅占一个位置
+// 详见 CLAUDE.md "玩法实现状态" 表中"机器人玩家"行——未来扩展空间大
+//
+// 参数都可选：name 不传时随机 8 位字符串 avatarId 不传时取第一个角色
+// 用于测试 PUBG 多人对战体验（凑人数）但实际只能当人形靶子用
 func (g *GMCmd) CreateRobotInAiWorld(uid uint32, name string, avatarId uint32, posX, posY, posZ float64) {
 	if uid == 0 {
 		return
@@ -783,6 +995,9 @@ func (g *GMCmd) CreateRobotInAiWorld(uid uint32, name string, avatarId uint32, p
 	robot.SetPos(&model.Vector{X: posX, Y: posY, Z: posZ})
 }
 
+// ServerAnnounce 服务器公告（全服弹窗）
+// isRevoke=false 发布公告 / true 撤销已发布的公告
+// announceId 唯一标识 撤销时按 ID 查找
 func (g *GMCmd) ServerAnnounce(announceId uint32, announceMsg string, isRevoke bool) {
 	if !isRevoke {
 		GAME.ServerAnnounceNotify(announceId, announceMsg)
@@ -791,6 +1006,15 @@ func (g *GMCmd) ServerAnnounce(announceId uint32, announceMsg string, isRevoke b
 	}
 }
 
+// SendMsgToPlayer 给玩家发任意 cmd 消息（运维调试神器）
+//
+// 通过 cmdName + JSON 字符串构造任意协议消息发给客户端
+// 用例：调试新协议 / 触发客户端特定行为 / 展示活动公告等
+//
+// **安全限制**：禁止发 WindSeedClientNotify 和 PlayerLuaShellNotify
+//
+//	这两个是高危协议（前者控制客户端反作弊种子 后者远程执行 Lua）
+//	"what are you doing ???" 这条 Error 日志是作者拦截滥用尝试的吐槽
 func (g *GMCmd) SendMsgToPlayer(cmdName string, userId uint32, msgJson string) {
 	if cmdProtoMap == nil {
 		cmdProtoMap = cmd.NewCmdProtoMap()
@@ -845,6 +1069,11 @@ func (g *GMCmd) ShowAvatarCollider() {
 	engine.ShowAvatarCollider()
 }
 
+// AiWorldAoiDebug AI 世界 AOI 调试输出（运维诊断 PUBG 玩家可见性问题）
+//
+// 遍历 AI 世界所有非空 AOI 格子 打印每个格子里有哪些玩家及其位置
+// 用于排查"为什么玩家 A 看不到玩家 B"这类 AOI 视野同步 bug
+// 输出走 logger.Debug 大量日志 仅在 debug 级别可见
 func (g *GMCmd) AiWorldAoiDebug() {
 	aiWorld := WORLD_MANAGER.GetAiWorld()
 	if aiWorld == nil {
@@ -897,4 +1126,13 @@ func (g *GMCmd) SendMail(userId uint32, title string, content string) {
 		return
 	}
 	GAME.AddPlayerMail(userId, title, content)
+}
+
+func (g *GMCmd) SetPlayerClientVersion(userId uint32, version int) {
+	player := USER_MANAGER.GetOnlineUser(userId)
+	if player == nil {
+		logger.Error("player is nil, uid: %v", userId)
+		return
+	}
+	player.ClientVersion = version
 }

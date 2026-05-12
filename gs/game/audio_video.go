@@ -19,9 +19,25 @@ import (
 	"gitlab.com/gomidi/midi/v2/smf"
 )
 
+// 音视频 模块 - 项目中两个有趣的玩具功能
+//
+// 1) MIDI 弹奏（PlayAudio + StartMidiInputDev）：
+//   - 把 .mid 文件解析成音符流 → 通过 SceneAudioNotify 让原神客户端播放对应音符
+//   - 原神场景内的"风物之诗琴"等乐器可发音 服务端控制弹奏什么
+//   - 支持 PC 上接 MIDI 键盘实时弹奏（需要 librtmidi 见 audio_video_rtmidi.go）
+//   - AudioChan 是音符 channel 主循环 onUserTick 取出后发 SceneAudioNotify
+//
+// 2) JPEG 像素屏（LoadFrameFile + UpdateFrame）：
+//   - 80×80 像素的彩色图片用 7 种颜色 gadget 在 AI 世界场景 3 摆出来
+//   - 默认坐标（2700, 200, -1800）是预留的空地
+//   - rgb=true 全彩；rgb=false 仅黑白二值化
+//   - 灰度值映射到 7 色 gadget（CalcColorLight 算每个颜色的亮度排序）
+//
+// 这两个功能与游戏玩法无关 是作者的"创意演示"性质的实验品
+
 const (
-	KeyOffset              = -12 * 1 // 八度修正偏移
-	MidiInputDevPortNumber = 0
+	KeyOffset              = -12 * 1 // 八度修正偏移（MIDI key → 原神音符 偏移 12 半音 = 1 个八度）
+	MidiInputDevPortNumber = 0       // 默认 MIDI 输入设备端口号（外接 MIDI 键盘）
 )
 
 var (
@@ -42,6 +58,15 @@ func sendMidiMsg(msg midi.Message) {
 	AudioChan <- uint32(note)
 }
 
+// PlayAudio 播放 MIDI 文件（GMCmd.AvPlayAudio 入口）
+//
+// 处理：
+//  1. 解析 SMF 格式 取 BPM 计算每 tick 对应的毫秒数
+//  2. 每个 track 起一个 goroutine 按 Delta 时间间隔播放
+//  3. 每个音符通过 sendMidiMsg → AudioChan → 主循环发 SceneAudioNotify
+//
+// 仅支持单一 BPM 的 MIDI 文件（多次 Tempo 变化的复杂曲谱不支持）
+// 上传方式：把 .mid 转 base64 通过 AvPlayAudio 命令发给服务器
 func PlayAudio(fileData []byte) {
 	reader := bytes.NewReader(fileData)
 	audio, err := smf.ReadFrom(reader)
@@ -87,6 +112,9 @@ func busyPollWaitMilliSecond(delay uint32) {
 	}
 }
 
+// StartMidiInputDev 启动 MIDI 输入设备监听（GMCmd.AvStartMidiInputDev 入口）
+// 把外接 MIDI 键盘的实时弹奏转发到游戏内 让玩家用真实键盘弹原神乐器
+// 使用 gomidi/midi 库 底层 Windows 走 librtmidi.dll（见 audio_video_rtmidi.go）
 func StartMidiInputDev() error {
 	logger.Info("midi input dev port: %v", midi.GetInPorts())
 	in, err := midi.InPort(MidiInputDevPortNumber)
@@ -108,13 +136,15 @@ func StopMidiInputDev() {
 	midi.CloseDriver()
 }
 
+// JPEG 像素屏 - 用 7 色 gadget 在游戏世界里"显示"图片
+
 const (
-	SCREEN_WIDTH  = 80
-	SCREEN_HEIGHT = 80
-	SCREEN_DPI    = 0.5
+	SCREEN_WIDTH  = 80  // 像素宽（80 像素）
+	SCREEN_HEIGHT = 80  // 像素高（80 像素）
+	SCREEN_DPI    = 0.5 // 每像素物理距离（米）→ 80*0.5=40 米的屏幕
 )
 
-const GADGET_ID = 70590015
+const GADGET_ID = 70590015 // 黑白模式默认用的 gadget id（黄色"光"）
 
 var SCREEN_ENTITY_ID_LIST []uint32
 var FRAME_COLOR [][]int
@@ -177,6 +207,9 @@ func init() {
 	CalcColorLight()
 }
 
+// CalcColorLight 计算 7 种颜色的灰度亮度并按亮度排序
+// 灰度公式：gray = R*0.299 + G*0.587 + B*0.114（YUV 转换中的亮度系数）
+// 排序后按"亮度等差"重新分配 用于灰度→颜色的映射查表
 func CalcColorLight() {
 	COLOR_LIGHT_LIST = make(COLOR_LIGHT_LIST_SORT, 0)
 	for _, c := range ALL_COLOR {
@@ -248,6 +281,14 @@ func WriteJpgFile(fileName string, jpg image.Image) {
 	}
 }
 
+// LoadFrameFile 加载并预处理 JPEG 图片
+//
+// 处理：
+//  1. 解码 JPEG 到内存
+//  2. 灰度化每个像素（YUV 公式）
+//  3. 计算全图平均灰度 grayAvg → 用于黑白二值化阈值
+//  4. 按灰度查找最近的 7 色之一 填到 FRAME_COLOR[w][h]（rgb 模式用）
+//  5. 灰度高于 grayAvg 的填到 FRAME[w][h] = true（黑白模式用）
 func LoadFrameFile(fileData []byte) error {
 	reader := bytes.NewReader(fileData)
 	frameImg, err := jpeg.Decode(reader)
@@ -303,6 +344,20 @@ func LoadFrameFile(fileData []byte) error {
 	return nil
 }
 
+// UpdateFrame 更新像素屏画面（GMCmd.AvUpdateFrame 入口）
+//
+// 处理：
+//  1. LoadFrameFile 处理图片
+//  2. 销毁旧的像素 gadget 实体（一次最多 6400 个）
+//  3. 创建 80×80=6400 个 gadget 实体 用 SCREEN_DPI=0.5m 间距摆出来
+//  4. AddSceneEntityNotify 广播给场景内玩家
+//
+// rgb=true 全彩（每个像素用对应颜色 gadget）
+// rgb=false 黑白（仅亮像素位置摆默认颜色 gadget 暗像素留空）
+//
+// 性能警告：6400 个实体一次性创建/销毁 不适合频繁切图
+//
+//	作者拿来当玩具不是真正的"动画屏幕"
 func UpdateFrame(fileData []byte, basePos *model.Vector, rgb bool) {
 	err := LoadFrameFile(fileData)
 	if err != nil {

@@ -8,6 +8,21 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// 固定响应接口集合 - 让客户端的辅助接口请求不报错
+//
+// 这些接口都是客户端会调但服务端无需真实处理的：
+//   - 协议条款（getAgreementInfos / postCompareProtocolVersion）
+//   - 风控验证（check 占位 不实际启用极验）
+//   - SDK 配置（combo / getConfig / loadConfig）
+//   - 字体下发（getFont 占位）
+//   - 多语言静态资源（mi18n 静态文件）
+//
+// 所有响应都是硬编码 JSON 字符串
+//   - 客户端按平台不同走 client_type=1/2/3（IOS/Android/Windows）分支
+//   - 内容是从米哈游官方接口抓包得到的真实响应（已知不会变）
+//
+// 这种"占位响应"的方式比从配置加载更高效（避免每次都查 DB/解析 JSON）
+
 // 返回固定数据
 
 // GET https://hk4e-sdk-os.hoyoverse.com/hk4e_global/mdk/agreement/api/getAgreementInfos?biz_key=hk4e_global&country_code=CN&token=ZXN2RfKSVOLRBMsqQeHaSwL7gQYfUp1d&uid=222546880 HTTP/1.1

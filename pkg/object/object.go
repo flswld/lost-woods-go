@@ -1,3 +1,18 @@
+// 对象操作工具集
+//
+// 提供：
+//   - DeepCopy: GOB 序列化深拷贝（避免共享指针）
+//   - DeepMarshal/DeepUnmarshal: GOB 序列化（仅对象内部用）
+//   - CopyProtoMsgSameField: PB 对象同名字段复制（项目最重要的工具之一）
+//     · 用 protojson 中转 实现两个不同 PB 类型间的字段复制
+//     · 客户端协议代理（gate/net/proto_endecode.go）大量使用
+//     · 让 dynamic.Message ↔ 静态 PB 对象互转成为可能
+//   - ConvBoolToInt64 / ConvInt64ToBool: 布尔 ↔ 整数转换（PB 字段常用）
+//
+// CopyProtoMsgSameField 工作原理：
+//   src.PB → JSON（包含字段名）→ dst.PB（按字段名解析）
+//   只有同名字段会被复制 不同名/不存在的字段被忽略
+
 package object
 
 import (

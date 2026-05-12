@@ -3,6 +3,7 @@ package game
 import (
 	"time"
 
+	"hk4e/common/constant"
 	"hk4e/gdconf"
 	"hk4e/gs/model"
 	"hk4e/pkg/random"
@@ -14,14 +15,44 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
+// 抽卡 模块
+//
+// 项目自创实现 配置在 gdconf/game_data_config/ext/（详见 CLAUDE.md "配置数据来源"）
+// **作者自己设计的 4 池硬编码方案**：
+//   - 300: 温迪（角色UP=1022 4星UP=1023/1031/1014）
+//   - 400: 可莉（角色UP=1029 4星UP=1025/1034/1043）
+//   - 431: 阿莫斯之弓+天空之傲（双武器UP=15502/12501 4星UP=11403/12402/13401/14409/15401）
+//   - 201: 常驻（5星UP=刻晴1003/迪卢克1016）
+//
+// 抽卡核心机制（与官服一致）：
+//   - 90 抽 5 星保底（GuaranteedStat 累加）
+//   - 10 抽 4 星保底
+//   - 大保底（5星非UP后下次必出UP）
+//   - 武器池有定轨愿望（WishItem）
+//   - 可莉特殊池：3 抽必出 1029（GM 测试用）
+//
+// JWT token 用于客户端访问"抽卡历史"和"概率说明"的 H5 页面 URL（http://223.5.5.5/gacha?...）
+// **服务端没有真正实现这两个 H5 页面**：URL 是占位 客户端打开会 404
+// 抽卡的核心算法在 doGachaOnce + doGachaRandDropFull/Once 这三个函数
+
 /************************************************** 接口请求 **************************************************/
 
+// UserInfo JWT 用户信息（仅用于抽卡 H5 页面访问鉴权）
 type UserInfo struct {
 	UserId uint32 `json:"userId"`
 	jwt.RegisteredClaims
 }
 
-// GetGachaInfoReq 获取卡池信息
+// GetGachaInfoReq 获取卡池信息（玩家进入抽卡界面时调用）
+//
+// 返回 4 个硬编码卡池：
+//   - 300/400/431: 用 itemId=223（纠缠之缘 = 限定原石）抽
+//   - 201: 用 itemId=224（相遇之缘 = 常驻原石）抽
+//
+// LeftGachaTimes/GachaTimesLimit = 2147483647 → 不限抽次（不实现"次数限制"）
+// EndTime = 2051193600 = 2034 年 → 卡池永不过期
+//
+// **设计选择**：作者用动态生成 JWT 给抽卡 URL 防止玩家伪造但服务端没真正校验
 func (g *Game) GetGachaInfoReq(player *model.Player, payloadMsg pb.Message) {
 	serverAddr := "http://223.5.5.5"
 	userInfo := &UserInfo{
@@ -256,6 +287,8 @@ func (g *Game) DoGachaReq(player *model.Player, payloadMsg pb.Message) {
 		if !ok {
 			itemId = 11301
 		}
+		// 判断角色是否已拥有（决定后续给星尘还是星辉）
+		isRepeatAvatar := false
 		// 添加抽卡获得的道具
 		if itemId > 1000 && itemId < 2000 {
 			avatarId := (itemId % 1000) + 10000000
@@ -264,6 +297,7 @@ func (g *Game) DoGachaReq(player *model.Player, payloadMsg pb.Message) {
 			if avatar == nil {
 				g.AddPlayerAvatar(player.PlayerId, avatarId)
 			} else {
+				isRepeatAvatar = true
 				constellationItemId := itemId + 100
 				if g.GetPlayerItemCount(player.PlayerId, constellationItemId) < 6 {
 					g.AddPlayerItem(player.PlayerId, []*ChangeItem{{ItemId: constellationItemId, ChangeCount: 1}}, proto.ActionReasonType_ACTION_REASON_GACHA)
@@ -274,21 +308,31 @@ func (g *Game) DoGachaReq(player *model.Player, payloadMsg pb.Message) {
 		} else {
 			g.AddPlayerItem(player.PlayerId, []*ChangeItem{{ItemId: itemId, ChangeCount: 1}}, proto.ActionReasonType_ACTION_REASON_GACHA)
 		}
-		// 计算星尘星辉
-		xc := uint32(random.GetRandomInt32(0, 10))
-		xh := uint32(random.GetRandomInt32(0, 10))
+
+		// 计算星尘星辉（业界已知规则 配置表里只有 token id 映射没有数量公式）
+		// 3★ 武器: 15 星尘
+		// 4★ 角色未拥有: 20 星尘 / 已拥有: 2 星辉（命星石另算）
+		// 4★ 武器: 20 星尘（武器无"重复"概念）
+		// 5★ 角色未拥有: 40 星尘 / 已拥有: 10 星辉（命星石另算）
+		// 5★ 武器: 40 星尘
+		stardust, starlight := calcGachaTokens(itemId, isRepeatAvatar)
+
 		gachaItem := new(proto.GachaItem)
 		gachaItem.GachaItem = &proto.ItemParam{ItemId: itemId, Count: 1}
-		// 星尘
-		if xc != 0 {
-			g.AddPlayerItem(player.PlayerId, []*ChangeItem{{ItemId: 222, ChangeCount: xc}}, proto.ActionReasonType_ACTION_REASON_GACHA)
-			gachaItem.TokenItemList = []*proto.ItemParam{{ItemId: 222, Count: xc}}
+		tokenList := make([]*proto.ItemParam, 0, 2)
+		if stardust != 0 {
+			g.AddPlayerItem(player.PlayerId, []*ChangeItem{{ItemId: constant.ITEM_ID_STARDUST, ChangeCount: stardust}}, proto.ActionReasonType_ACTION_REASON_GACHA)
+			tokenList = append(tokenList, &proto.ItemParam{ItemId: constant.ITEM_ID_STARDUST, Count: stardust})
 		}
-		// 星辉
-		if xh != 0 {
-			g.AddPlayerItem(player.PlayerId, []*ChangeItem{{ItemId: 221, ChangeCount: xh}}, proto.ActionReasonType_ACTION_REASON_GACHA)
-			gachaItem.TransferItems = []*proto.GachaTransferItem{{Item: &proto.ItemParam{ItemId: 221, Count: xh}}}
+		if starlight != 0 {
+			g.AddPlayerItem(player.PlayerId, []*ChangeItem{{ItemId: constant.ITEM_ID_STARGLITTER, ChangeCount: starlight}}, proto.ActionReasonType_ACTION_REASON_GACHA)
+			tokenList = append(tokenList, &proto.ItemParam{ItemId: constant.ITEM_ID_STARGLITTER, Count: starlight})
 		}
+		if len(tokenList) > 0 {
+			gachaItem.TokenItemList = tokenList
+		}
+		// 注：transfer_items 的语义是"重复抽到 → 转化为某物的转化记录"
+		// 当前简化逻辑下不填该字段（旧版本错误地填了星辉到这里）
 		doGachaRsp.GachaItemList = append(doGachaRsp.GachaItemList, gachaItem)
 	}
 	logger.Debug("doGachaRsp: %v", doGachaRsp.String())
@@ -297,7 +341,13 @@ func (g *Game) DoGachaReq(player *model.Player, payloadMsg pb.Message) {
 
 /************************************************** 游戏功能 **************************************************/
 
-// 扣1给可莉刷烧烤酱
+// doGachaKlee 可莉池特殊抽卡（彩蛋 与正常抽卡逻辑无关）
+//
+// "扣1给可莉刷烧烤酱"——作者中二式注释
+// 算法：把全部 4/5星角色 + 全部 5星武器 + 4 种货币（原石/摩拉/粉球/蓝球）+ 100081（特殊物品）合一起平均随机
+// 100081 是 "为了同志的事业 永远奋斗" 类似的彩蛋物品（item id 在 ext 配置）
+//
+// 触发条件：见 DoGachaReq 中的特殊判断
 func (g *Game) doGachaKlee() (bool, uint32) {
 	allAvatarList := make([]uint32, 0)
 	allAvatarDataConfig := g.GetAllAvatarDataConfig()
@@ -350,7 +400,70 @@ const (
 	WeaponPurpleTimesFixValue       int32  = 6000 // 武器池4星概率修正因子
 )
 
-// 单抽一次
+// calcGachaTokens 按抽到的物品 itemId + 是否重复角色 计算应给的星尘和星辉数量
+// 业界已知规则（hk4e 服务端配置表里只有 token id 映射没有数量公式 故硬编码）：
+//
+//	3★ 武器                     → 15 星尘
+//	4★ 角色未拥有 / 4★ 武器     → 20 星尘
+//	4★ 角色已拥有                → 2 星辉（命星石另发）
+//	5★ 角色未拥有 / 5★ 武器     → 40 星尘
+//	5★ 角色已拥有                → 10 星辉（命星石另发）
+func calcGachaTokens(itemId uint32, isRepeatAvatar bool) (stardust uint32, starlight uint32) {
+	var quality int32
+	if itemId > 1000 && itemId < 2000 {
+		avatarId := (itemId % 1000) + 10000000
+		avatarData := gdconf.GetAvatarDataById(int32(avatarId))
+		if avatarData == nil {
+			return 0, 0
+		}
+		quality = avatarData.QualityType
+	} else if itemId > 10000 && itemId < 20000 {
+		itemData := gdconf.GetItemDataById(int32(itemId))
+		if itemData == nil {
+			return 0, 0
+		}
+		quality = itemData.EquipLevel
+	} else {
+		return 0, 0
+	}
+	switch quality {
+	case 3:
+		return 15, 0
+	case 4:
+		if isRepeatAvatar {
+			return 0, 2
+		}
+		return 20, 0
+	case 5:
+		if isRepeatAvatar {
+			return 0, 10
+		}
+		return 40, 0
+	}
+	return 0, 0
+}
+
+// doGachaOnce 单抽一次（核心算法 含保底机制）
+//
+// 处理流程：
+//  1. 保底计数+1（OrangeTimes 5星 / PurpleTimes 4星）
+//  2. 概率修正：
+//     · 标准池：第 74 抽起 5 星概率 +600/抽（达到约 70% 时触发软保底）
+//     · 武器池：第 63 抽起 5 星概率 +700/抽（武器池软保底来得更早）
+//     · 4 星类似但阈值是 9/8 抽
+//  3. 走 doGachaRandDropFull 抽出基础掉落组（5/4/3星）
+//  4. 大保底机制（mustGetUpEnable=true）：
+//     · 5 星非UP → MustGetUpOrange=true 下次5星必出UP
+//     · 已 MustGetUpOrange + 抽到 5 星 → 直接换成 UP 池抽
+//     · 4 星同理
+//  5. 抽到 5 星重置 OrangeTimes 计数
+//
+// 配置表 ID 规则（硬编码约定）：
+//   - 5 星掉落组 = gachaType*10 + 1  (300 池→3001)
+//   - 4 星 = gachaType*10 + 2  (3002)
+//   - 3 星 = gachaType*10 + 3  (3003)
+//   - UP 5 星 = gachaType*100 + 12  (30012)
+//   - UP 4 星 = gachaType*100 + 22  (30022)
 func (g *Game) doGachaOnce(userId uint32, gachaType uint32, mustGetUpEnable bool, weaponFix bool) (bool, uint32) {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {
@@ -547,7 +660,11 @@ func (g *Game) doGachaOnce(userId uint32, gachaType uint32, mustGetUpEnable bool
 	return ok, gachaItemId
 }
 
-// 走一次完整流程的掉落组
+// doGachaRandDropFull 走完整掉落组流程（递归选择直到 IsEnd=true）
+//
+// 抽卡掉落组是树形结构：先随机选 5/4/3星组 → 再随机该组内具体角色/武器 → IsEnd 才是叶节点物品
+// 最多递归 1000 层防止配置错误死循环
+// 例如：300 池 → 抽到"30012 UP5星组" → 抽到"温迪 1022" → IsEnd 返回
 func (g *Game) doGachaRandDropFull(gachaDropGroupDataConfig *gdconf.GachaDropGroupData) (bool, *gdconf.GachaDrop) {
 	for i := 0; i < 1000; i++ {
 		drop := g.doGachaRandDropOnce(gachaDropGroupDataConfig)

@@ -16,28 +16,26 @@ type ReliquaryAffixData struct {
 }
 
 func (g *GameDataConfig) loadReliquaryAffixData() {
-	g.ReliquaryAffixDataMap = make(map[int32]map[int32]*ReliquaryAffixData)
+	g.ReliquaryAffixDataDepotMap = make(map[int32]map[int32]*ReliquaryAffixData)
+	g.ReliquaryAffixDataMap = make(map[int32]*ReliquaryAffixData)
 	reliquaryAffixDataList := make([]*ReliquaryAffixData, 0)
 	readTable[ReliquaryAffixData](g.txtPrefix+"ReliquaryAffixData.txt", &reliquaryAffixDataList)
 	for _, reliquaryAffixData := range reliquaryAffixDataList {
 		// 通过主属性库ID找到
-		_, ok := g.ReliquaryAffixDataMap[reliquaryAffixData.AppendPropDepotId]
+		_, ok := g.ReliquaryAffixDataDepotMap[reliquaryAffixData.AppendPropDepotId]
 		if !ok {
-			g.ReliquaryAffixDataMap[reliquaryAffixData.AppendPropDepotId] = make(map[int32]*ReliquaryAffixData)
+			g.ReliquaryAffixDataDepotMap[reliquaryAffixData.AppendPropDepotId] = make(map[int32]*ReliquaryAffixData)
 		}
-		g.ReliquaryAffixDataMap[reliquaryAffixData.AppendPropDepotId][reliquaryAffixData.AppendPropId] = reliquaryAffixData
+		g.ReliquaryAffixDataDepotMap[reliquaryAffixData.AppendPropDepotId][reliquaryAffixData.AppendPropId] = reliquaryAffixData
+		g.ReliquaryAffixDataMap[reliquaryAffixData.AppendPropId] = reliquaryAffixData
 	}
-	logger.Info("ReliquaryAffixData Count: %v", len(g.ReliquaryAffixDataMap))
+	logger.Info("ReliquaryAffixData Count: %v", len(g.ReliquaryAffixDataDepotMap))
 }
 
-func GetReliquaryAffixDataByDepotIdAndPropId(appendPropDepotId int32, appendPropId int32) *ReliquaryAffixData {
-	value, exist := CONF.ReliquaryAffixDataMap[appendPropDepotId]
-	if !exist {
-		return nil
-	}
-	return value[appendPropId]
+func GetReliquaryAffixDataByPropId(appendPropId int32) *ReliquaryAffixData {
+	return CONF.ReliquaryAffixDataMap[appendPropId]
 }
 
-func GetReliquaryAffixDataMap() map[int32]map[int32]*ReliquaryAffixData {
-	return CONF.ReliquaryAffixDataMap
+func GetReliquaryAffixDataMapByDepotId(appendPropDepotId int32) map[int32]*ReliquaryAffixData {
+	return CONF.ReliquaryAffixDataDepotMap[appendPropDepotId]
 }

@@ -18,8 +18,24 @@ import (
 	"github.com/flswld/halo/logger"
 )
 
-var APPID string
-var APPVERSION string
+// dispatch 服务启动入口
+//
+// dispatch 是客户端的"登录入口" 提供：
+//  1. 一级 dispatch（/query_region_list）：返回所有区服列表
+//  2. 二级 dispatch（/query_cur_region）：返回特定区服的 gate 地址 + region 加密配置
+//  3. SDK 登录（/account/login + /account/verify）：账号-密码验证 → 发 Token
+//  4. ComboToken 交换（v2Login）：用 Token 换取 ComboToken（游戏内会话凭证）
+//  5. Gate 调用（/gate/token/verify）：让 Gate 验证客户端的 ComboToken
+//
+// 启动顺序：
+//  1. 注册到 Node（不带 LoadCount 因为 dispatch 通常是单实例）
+//  2. 每 15s keepalive
+//  3. 启动 MQ + DB（账号表）
+//  4. 启动 controller（gin HTTP 服务监听 8080 + 2345）
+//  5. 等信号优雅退出
+
+var APPID string      // 注册到 Node 的 AppId
+var APPVERSION string // 编译时注入
 
 func Run(ctx context.Context) error {
 	// natsrpc client

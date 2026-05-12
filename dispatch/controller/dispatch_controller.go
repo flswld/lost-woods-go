@@ -24,6 +24,23 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
+// dispatch HTTP 接口实现 - 客户端启动入口
+//
+// 客户端启动后的网络请求顺序（前 3 步全部由 dispatch 处理）：
+//   1. /query_region_list（一级 dispatch）→ 区服列表 + 全局 ec2b 密钥
+//   2. /query_cur_region?key_id=N（二级 dispatch）→ 选定区服的 Gate 地址 + region 配置
+//      · 用 KeyId 选 5 套加密密钥之一加密响应（防止网关嗅探）
+//      · v2.7.5+ 客户端还会校验签名（signRsaKey）
+//   3. SDK 登录 → 拿 Token → ComboToken → 才能 KCP 连 Gate
+//
+// 关键安全机制：
+//   - region 响应用 ec2b xor 加密（dispatchEc2bData 是密钥派生 seed）
+//   - region 响应用 RSA 签名（v2.7.5+ 客户端必需）
+//   - region 响应用 5 套 RSA 加密之一加密 client_custom_config_encrypted
+//
+// **stopServer 机制**：服务端在停服窗口内 region 返回 retcode=RET_STOP_SERVER
+//   客户端弹"服务器维护中"对话框 阻止登录
+
 // RegionCustomConfig 区服相关的配置 避免在http中使用Json格式
 type RegionCustomConfig struct {
 	CloseAntiDebug   bool `json:"close_antidebug"`  // 默认打开反调开关 默认false
@@ -51,7 +68,15 @@ type ClientCustomConfig struct {
 	CoverSwitch    []int32           `json:"coverSwitch"`
 }
 
-// GetRegionList 一级dispatch信息
+// GetRegionList 构造一级 dispatch 响应（QueryRegionListHttpRsp）
+//
+// 返回内容：
+//   - RegionList: 区服列表（这里硬编码 1 个区服）
+//   - ClientSecretKey: dispatch ec2b 密钥（客户端用此 key 解密 ClientCustomConfig）
+//   - ClientCustomConfigEncrypted: ec2b xor 加密后的客户端配置 JSON
+//     · DebugMenu=true 开启调试菜单（显示 GM Talk 输入框）
+//     · CodeSwitch/CoverSwitch: 客户端功能开关（如 3628 / 40 是已知的开关编号）
+//   - EnableLoginPc=true: 允许 PC 客户端登录
 func GetRegionList(ec2b *random.Ec2b) *proto.QueryRegionListHttpRsp {
 	regionList := new(proto.QueryRegionListHttpRsp)
 	regionList.Retcode = 0
@@ -86,7 +111,17 @@ func GetRegionList(ec2b *random.Ec2b) *proto.QueryRegionListHttpRsp {
 	return regionList
 }
 
-// GetRegionCurr 二级dispatch信息
+// GetRegionCurr 构造二级 dispatch 响应（QueryCurrRegionHttpRsp）
+//
+// 三种模式（按 retcode 区分）：
+//   - 0: 正常 → 返回 RegionInfo（gate ip+port）+ region custom config
+//   - RET_STOP_SERVER: 停服 → 返回 StopServer（标题/内容/起止时间 客户端弹维护对话框）
+//   - RET_CLIENT_FORCE_UPDATE: 强制更新 → （此处未使用）
+//
+// RegionInfo 包含：
+//   - GateserverIp/Port: 客户端连 KCP 的目标
+//   - SecretKey: 这次会话的 ec2b（与一级 dispatch 一致）
+//   - 各种 URL: 资源服 / 数据上报 / GM 后台等
 func GetRegionCurr(ec2b *random.Ec2b, gateServerAddr *api.GateServerAddr, stopServerInfo *api.StopServerInfo) *proto.QueryCurrRegionHttpRsp {
 	regionCurr := new(proto.QueryCurrRegionHttpRsp)
 	// region_info retcode == 0 || RET_STOP_SERVER

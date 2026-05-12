@@ -10,6 +10,22 @@ import (
 	"github.com/hjson/hjson-go/v4"
 )
 
+// 角色配置加载器 - gdconf 53 个 _data.go 中的代表
+//
+// 三阶段统一模式（所有 _data.go 都遵循此结构 详见 CLAUDE.md "配置数据层"）：
+//   1. 结构体定义 + 全局 ConfigMap（在 GameDataConfig 中）
+//   2. 加载函数 loadXxxData()：用 readTable[T]() 读 CSV / hjson 读 JSON / lua VM 跑 Lua
+//   3. 公开查询 GetXxxById(id) / GetXxxMap()
+//
+// 角色配置特殊：
+//   - CSV 直读基础字段（22 个战斗属性基础值）
+//   - 动态生成 FightPropList / PropGrowList（运行时计算）
+//   - 加载外部 JSON ConfigAbility（角色技能能力配置）
+//
+// 其他相似的 _data.go（理解了这个就懂全部）：
+//   - weapon_data / monster_data / item_data / gadget_data 等 50+ 个
+//   - 每个对应一类原神游戏数据 加载逻辑高度类似
+
 // FightProp 战斗属性
 type FightProp struct {
 	FightPropId    int32

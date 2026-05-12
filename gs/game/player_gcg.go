@@ -11,10 +11,16 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
+// GCG（七圣召唤）玩家请求处理（详见 game_gcg_manager.go 文件头说明 GCG 整体未完成）
+
+// GCGLogin 玩家登录时下发 GCG 基础信息
+//
+// **当前直接 return**：作者注释 "GCG目前可能有点问题先不发送 以后再慢慢搞"
+// 之后的代码不会执行 玩家登录时根本不会收到 GCG 数据
 func (g *Game) GCGLogin(player *model.Player) {
 	// GCG目前可能有点问题先不发送
 	// 以后再慢慢搞
-
+	return
 	// GCG基础信息
 	g.SendMsg(cmd.GCGBasicDataNotify, player.PlayerId, player.ClientSeq, g.PacketGCGBasicDataNotify(player))
 	// GCG等级挑战解锁
@@ -27,7 +33,9 @@ func (g *Game) GCGLogin(player *model.Player) {
 	g.SendMsg(cmd.GCGTCTavernChallengeDataNotify, player.PlayerId, player.ClientSeq, g.PacketGCGTCTavernChallengeDataNotify(player))
 }
 
-// GCGTavernInit GCG酒馆初始化
+// GCGTavernInit 玩家进入猫尾酒馆（sceneId=1076）时下发 GCG 酒馆界面数据
+// 调用方：SceneInitFinishReq 进副本时（dungeonId != 0）
+// 1076 是 GCG 酒馆秘境场景 进了发酒馆 NPC 列表 + 挑战数据
 func (g *Game) GCGTavernInit(player *model.Player) {
 	if player.GetSceneId() == 1076 {
 		// GCG酒馆信息通知
@@ -37,7 +45,14 @@ func (g *Game) GCGTavernInit(player *model.Player) {
 	}
 }
 
-// GCGStartChallenge GCG开始挑战
+// GCGStartChallenge 开始 GCG 挑战（玩家点酒馆 NPC 选择"决斗"）
+//
+// 处理：
+//  1. 创建 GCG 游戏（gameId=30101 写死）
+//  2. 把玩家传送到 sceneId=79999（GCG 决斗场景）+ dungeonId=2162
+//  3. 客户端进副本后开始走 GCG 协议（GCGAskDuelReq → GCGInitFinishReq → ...）
+//
+// 注意：传送目的地是 sceneId=79999（专用决斗场景）不是 80001 等普通场景
 func (g *Game) GCGStartChallenge(player *model.Player) {
 	// GCG开始游戏通知
 	gcgStartChallengeByCheckRewardRsp := &proto.GCGStartChallengeByCheckRewardRsp{
@@ -69,7 +84,17 @@ func (g *Game) GCGStartChallenge(player *model.Player) {
 	)
 }
 
-// GCGAskDuelReq GCG决斗请求
+// GCGAskDuelReq GCG 决斗请求（玩家加载完决斗场景后客户端发起）
+//
+// 服务端响应一个庞大的 GCGDuel 对象 包含：
+//   - 双方玩家信息（ShowInfoList）
+//   - 牌堆/手牌/角色卡（CardList）
+//   - 牌盒布局（FieldList）：角色区/手牌区/出战区/支援区/召唤区/牌堆等
+//   - 历史卡牌/历史消息包（断线重连用）
+//   - 当前阶段
+//   - ChallengeList: 写死的 8 项挑战目标（CurProgress 从 906 到 909 占位）
+//
+// 这是项目最复杂的单个响应之一 几百行代码组装一个对局快照
 func (g *Game) GCGAskDuelReq(player *model.Player, payloadMsg pb.Message) {
 	// 获取玩家所在的游戏
 	game, ok := GCG_MANAGER.gameMap[player.GCGCurGameGuid]
@@ -288,7 +313,15 @@ func (g *Game) GCGInitFinishReq(player *model.Player, payloadMsg pb.Message) {
 	game.CheckAllInitFinish()
 }
 
-// GCGOperationReq GCG游戏客户端操作请求
+// GCGOperationReq GCG 客户端操作请求（统一入口 按 OpType 分发）
+//
+// 4 种操作类型（玩家在 GCG 对局界面里的所有交互都通过这一个请求）：
+//   - SELECT_ON_STAGE: 选出战角色
+//   - REROLL_DICE: 重投骰子
+//   - USE_SKILL: 使用技能
+//   - PLAY_CARD: 打出手牌（**未实现**）
+//
+// 各操作走对应的 ControllerXXX 方法（详见 game_gcg_manager.go）
 func (g *Game) GCGOperationReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.GCGOperationReq)
 

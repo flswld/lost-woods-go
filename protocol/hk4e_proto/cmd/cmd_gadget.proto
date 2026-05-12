@@ -1,3 +1,5 @@
+// 物件协议
+
 syntax = "proto3";
 
 package proto;
@@ -6,12 +8,13 @@ import "define.proto";
 
 option go_package = "./;proto";
 
+// 交互类型
 enum InteractType {
     INTERACT_NONE = 0;
-    INTERACT_PICK_ITEM = 1;
-    INTERACT_GATHER = 2;
-    INTERACT_OPEN_CHEST = 3;
-    INTERACT_OPEN_STATUE = 4;
+    INTERACT_PICK_ITEM = 1;   // 拾取道具
+    INTERACT_GATHER = 2;      // 采集
+    INTERACT_OPEN_CHEST = 3;  // 开宝箱
+    INTERACT_OPEN_STATUE = 4; // 地城领奖台领奖
     INTERACT_CONSUM = 5;
     INTERACT_MP_PLAY_REWARD = 6;
     INTERACT_VIEW = 7;
@@ -26,9 +29,10 @@ enum InteractType {
     INTERACT_DESHRET_OBELISK = 16;
 }
 
+// 交互操作类型
 enum InterOpType {
-    INTER_OP_FINISH = 0;
-    INTER_OP_START = 1;
+    INTER_OP_FINISH = 0; // 完成交互
+    INTER_OP_START = 1;  // 开始交互
 }
 
 enum ResinCostType {
@@ -56,6 +60,7 @@ enum VehicleInteractType {
     VEHICLE_INTERACT_OUT = 2;
 }
 
+// 物件交互
 message GadgetInteractReq {
     enum CmdId {
         option allow_alias = true;
@@ -66,12 +71,12 @@ message GadgetInteractReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 gadget_id = 8;
+    uint32 gadget_id = 8;        // 物件配置ID
     bool is_use_condense_resin = 15;
-    InterOpType op_type = 5;
+    InterOpType op_type = 5;     // 交互操作类型
     ResinCostType resin_cost_type = 1;
     uint32 ui_interact_id = 2;
-    uint32 gadget_entity_id = 4;
+    uint32 gadget_entity_id = 4; // 物件实体ID
 }
 
 message GadgetInteractRsp {
@@ -83,13 +88,14 @@ message GadgetInteractRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 gadget_entity_id = 10;
-    InteractType interact_type = 2;
-    InterOpType op_type = 3;
+    uint32 gadget_entity_id = 10;   // 物件实体ID
+    InteractType interact_type = 2; // 交互类型
+    InterOpType op_type = 3;        // 交互操作类型
     int32 retcode = 7;
-    uint32 gadget_id = 15;
+    uint32 gadget_id = 15;          // 物件配置ID
 }
 
+// 物件状态通知(S->C)
 message GadgetStateNotify {
     enum CmdId {
         option allow_alias = true;
@@ -99,11 +105,12 @@ message GadgetStateNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 gadget_entity_id = 5;
-    uint32 gadget_state = 3;
-    bool is_enable_interact = 11;
+    uint32 gadget_entity_id = 5;  // 物件实体ID
+    uint32 gadget_state = 3;      // 物件状态(取值范围: GadgetState)
+    bool is_enable_interact = 11; // 是否可交互
 }
 
+// 操作台选项通知(改变后通知)
 message WorktopOptionNotify {
     enum CmdId {
         option allow_alias = true;
@@ -113,10 +120,11 @@ message WorktopOptionNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 gadget_entity_id = 11;
-    repeated uint32 option_list = 8;
+    uint32 gadget_entity_id = 11;    // 物件实体ID
+    repeated uint32 option_list = 8; // 操作台选项列表
 }
 
+// 选择操作台选项
 message SelectWorktopOptionReq {
     enum CmdId {
         option allow_alias = true;
@@ -127,8 +135,8 @@ message SelectWorktopOptionReq {
         IS_ALLOW_CLIENT = 1;
     }
 
-    uint32 gadget_entity_id = 12;
-    uint32 option_id = 11;
+    uint32 gadget_entity_id = 12; // 物件实体ID
+    uint32 option_id = 11;        // 选项ID
 }
 
 message SelectWorktopOptionRsp {
@@ -140,8 +148,8 @@ message SelectWorktopOptionRsp {
         ENET_IS_RELIABLE = 1;
     }
 
-    uint32 gadget_entity_id = 13;
-    uint32 option_id = 7;
+    uint32 gadget_entity_id = 13; // 物件实体ID
+    uint32 option_id = 7;         // 选项ID
     int32 retcode = 4;
 }
 
@@ -154,7 +162,7 @@ message BossChestActivateNotify {
         ENET_IS_RELIABLE = 1;
     }
 
-    repeated uint32 qualify_uid_list = 1;
+    repeated uint32 qualify_uid_list = 1; // 交互资格的uid列表
     uint32 entity_id = 12;
 }
 

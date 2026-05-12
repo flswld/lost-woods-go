@@ -1,3 +1,5 @@
+// 社交相关的服务器协议
+
 syntax = "proto3";
 
 package proto;
@@ -61,6 +63,7 @@ message AddAskFriendNotify {
     uint32 source_id = 1;
 }
 
+// 获取好友列表
 message ServerGetPlayerFriendListReq {
     enum CmdId {
         option allow_alias = true;
@@ -148,7 +151,7 @@ message ServerDealAddFriendReq {
     }
 
     uint32 target_uid = 1;
-    DealAddFriendResultType deal_add_friend_result = 2;
+    DealAddFriendResultType deal_add_friend_result = 2; // 添加好友结果
 }
 
 message ServerDealAddFriendRsp {

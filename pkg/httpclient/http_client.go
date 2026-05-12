@@ -12,6 +12,23 @@ import (
 	"github.com/flswld/halo/logger"
 )
 
+// HTTP 客户端工具集（泛型 GET/POST）
+//
+// 项目用例：
+//   - gate doGateLogin → POST /gate/token/verify 验证 ComboToken
+//   - robot 模拟客户端的 dispatch / SDK 登录请求
+//
+// 配置：
+//   - 超时 10 秒
+//   - InsecureSkipVerify=true（跳过 TLS 证书校验 项目内部通信用 自签证书也能用）
+//   - DisableKeepAlives=true（每次请求独立连接 避免长连接异常）
+//
+// 泛型支持：T 是响应 JSON 解析的目标结构体类型
+//   - GetJson[Rsp]: GET 请求返回 *Rsp
+//   - PostJson[Rsp]: POST 请求返回 *Rsp
+//
+// authToken 可选参数：传入则添加 Authorization: Bearer xxx 头
+
 var httpClient http.Client
 
 func init() {

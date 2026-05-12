@@ -20,6 +20,21 @@ import (
 	"github.com/flswld/halo/logger"
 )
 
+// GateLogin Robot 模拟客户端的 KCP 握手 + Gate 层登录
+//
+// 完整流程（**全程对称加解密走 XOR 没有 AES**）：
+//  1. 创建 KCP 会话连到 Gate（dispatchKey 用于初次握手前的 XOR 加密）
+//  2. 生成 ClientRandKey（8 字节客户端 seed）用 region_sign_key 公钥 RSA 加密
+//  3. 构造 GetPlayerTokenReq 发给 Gate（含 ComboToken + KeyId + ClientRandKey）
+//  4. 收到 GetPlayerTokenRsp 完成密钥协商：
+//     · ServerRandKey 用 region_enc_key_N.pem 私钥 RSA 解密拿到 ServerSeed
+//     · ServerSeed 内部已经是 serverSeed XOR clientSeed 的合并 seed
+//     · 把这个合并 seed 喂给 MT19937 派生 4096 字节伪随机字节流（详见 pkg/random/hk4e_ec2b.go）
+//     · 后续所有 KCP 报文都用这 4096 字节循环 XOR 加密
+//  5. session.Uid 写入 准备 PlayerLoginReq
+//
+// region_sign_key_pub.pem 存在时优先用（公钥模式 用于 verify-only 部署）
+// 否则从 region_sign_key.pem 私钥推导出公钥
 func GateLogin(dispatchInfo *DispatchInfo, accountInfo *AccountInfo, keyId string) (*net.Session, error) {
 	gateAddr := dispatchInfo.GateIp + ":" + strconv.Itoa(int(dispatchInfo.GatePort))
 	logger.Debug("connect gate addr: %v", gateAddr)

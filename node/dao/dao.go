@@ -19,6 +19,15 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 )
 
+// node 数据访问层（数据库名 node_hk4e）
+//
+// node 不需要 Redis（自己就是注册中心 状态全在内存 + 关键持久化字段写 DB）
+//
+// 唯一表：Region 表 仅 1 行（ID=1）持久化全集群级状态：
+//   - Ec2bData: 区服密钥 启动时加载 关闭时不写（密钥只生成一次）
+//   - NextUid: 玩家 uid 自增 关闭时写回（防止重启 uid 倒退）
+//   - StopServer/StartTime/EndTime: 停服信息
+//   - IpAddrWhiteList: 停服期间 IP 白名单
 type Dao struct {
 	mongo   *mongo.Client
 	mongoDb *mongo.Database

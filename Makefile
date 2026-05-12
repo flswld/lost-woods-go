@@ -41,8 +41,8 @@ docker_clean:
 # 复制配置模板等文件
 .PHONY: docker_config
 docker_config:
-	mkdir -p ./docker && cp -rf ./hk4e-go-cluster.yaml ./docker/
-	mkdir -p ./docker && cp -rf ./hk4e-go-standalone.yaml ./docker/
+	mkdir -p ./docker && cp -rf ./lost-woods-go-cluster.yaml ./docker/
+	mkdir -p ./docker && cp -rf ./lost-woods-go-standalone.yaml ./docker/
 	mkdir -p ./docker/node/bin && cp -rf ./cmd/node/* ./docker/node/bin/ && rm -rf ./docker/node/bin/*.go
 	mkdir -p ./docker/dispatch/bin && cp -rf ./cmd/dispatch/* ./docker/dispatch/bin/ && rm -rf ./docker/dispatch/bin/*.go
 	mkdir -p ./docker/gate/bin && cp -rf ./cmd/gate/* ./docker/gate/bin/ && rm -rf ./docker/gate/bin/*.go

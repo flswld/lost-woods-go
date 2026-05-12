@@ -14,9 +14,35 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
+// 武器养成 模块
+//
+// 武器三大养成维度：
+//   - 升级（WeaponUpgradeReq）：消耗精锻矿/经验书喂武器升等级（最高 90）
+//   - 突破（WeaponPromoteReq）：达到等级上限后突破（最多 6 次到 90 级）
+//   - 精炼（WeaponAwakenReq）：用同名武器或精钢做素材 提升精炼等级（1→5）
+//
+// **重要现状**：
+//   - 升级/突破：数据流程完整（等级/经验/突破阶段都正确写入存档）面板属性也会刷新
+//   - 精炼：仅修改 weapon.Refinement 字段 但**精炼带来的属性加成实际不生效**
+//     原因：精炼效果（如"暴击+8%/16%/24%/32%/40%"）通过 Ability 系统的 Modifier 实现
+//     项目的 Ability 系统大部分未完成 → 精炼数值不参与战斗计算
+//   - 武器配置存在 5 套精炼词条 但客户端 UI 显示得到 服务端实战不应用 这是一致的"假精炼"
+
 /************************************************** 接口请求 **************************************************/
 
-// WeaponAwakenReq 武器精炼请求
+// WeaponAwakenReq 武器精炼请求（消耗同名武器或精钢提升精炼等级）
+//
+// 处理：
+//  1. 校验目标武器和素材不能是同一个武器（GUID 不等）
+//  2. 校验武器星级 ≥ 3星（一星二星不可精炼）
+//  3. 校验当前精炼等级 < MAX_REFINEMENT(=4 即 5 级满精)
+//  4. 素材类型分两种：
+//     · ITEM_TYPE_WEAPON: 同名武器作素材 必须未装备 + 未上锁
+//     · ITEM_TYPE_MATERIAL: 精钢/某类专用精炼石 itemId 必须等于 AwakenMaterial
+//  5. 扣素材 + 扣摩拉（按当前精炼等级查 AwakenCoinCost 表）
+//  6. weapon.Refinement++ 更新存档 + 通知客户端更新 UI
+//
+// **效果不生效**：精炼带来的属性加成需要 Ability 系统支持 详见文件头说明
 func (g *Game) WeaponAwakenReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.WeaponAwakenReq)
 	// 确保精炼的武器与精炼材料不是同一个
@@ -174,7 +200,14 @@ func (g *Game) WeaponAwakenReq(player *model.Player, payloadMsg pb.Message) {
 	g.SendMsg(cmd.WeaponAwakenRsp, player.PlayerId, player.ClientSeq, weaponAwakenRsp)
 }
 
-// WeaponPromoteReq 武器突破请求
+// WeaponPromoteReq 武器突破请求（达到等级上限后解锁更高级数）
+//
+// 与 AvatarPromoteReq 流程几乎一致：
+//  1. 校验武器等级达到当前突破上限
+//  2. 校验冒险等级达到 MinPlayerLevel
+//  3. 扣突破材料 + 摩拉
+//  4. weapon.Promote++ 更新存档
+//  5. 武器装备时 → 调 UpdatePlayerAvatarFightProp 重算角色面板
 func (g *Game) WeaponPromoteReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.WeaponPromoteReq)
 	// 是否拥有武器
@@ -275,7 +308,17 @@ func (g *Game) WeaponPromoteReq(player *model.Player, payloadMsg pb.Message) {
 	g.SendMsg(cmd.WeaponPromoteRsp, player.PlayerId, player.ClientSeq, weaponPromoteRsp)
 }
 
-// WeaponUpgradeReq 武器升级请求
+// WeaponUpgradeReq 武器升级请求（精锻矿/经验书/低星武器作素材）
+//
+// 处理：
+//  1. 校验武器等级未达突破上限
+//  2. CalcWeaponUpgradeExpAndCoin 计算升级所得经验 + 摩拉成本
+//  3. 校验素材武器（FoodWeaponGuidList）：未装备 + 未上锁
+//  4. 扣素材物品 + 扣摩拉 + 扣素材武器
+//  5. CalcWeaponUpgrade 按经验值计算新等级 + 溢出经验返还的矿石
+//  6. 武器装备时 → 调 UpdatePlayerAvatarFightProp 重算角色面板
+//
+// 升级溢出经验返还矿石：突破前剩余经验自动按矿石价值换算返还（避免精锻矿浪费）
 func (g *Game) WeaponUpgradeReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.WeaponUpgradeReq)
 	// 是否拥有武器
@@ -415,7 +458,9 @@ func (g *Game) WeaponUpgradeReq(player *model.Player, payloadMsg pb.Message) {
 	g.SendMsg(cmd.WeaponUpgradeRsp, player.PlayerId, player.ClientSeq, weaponUpgradeRsp)
 }
 
-// CalcWeaponUpgradeReturnItemsReq 计算武器升级返回矿石请求
+// CalcWeaponUpgradeReturnItemsReq 客户端预览升级溢出返还（不实际升级）
+// 玩家在升级UI上选材料时 客户端会发这个请求实时显示"将返还 X 个 Y 矿石"
+// 等同于走 CalcWeaponUpgradeExpAndCoin + CalcWeaponUpgrade 但不扣物品/不写存档
 func (g *Game) CalcWeaponUpgradeReturnItemsReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.CalcWeaponUpgradeReturnItemsReq)
 	// 是否拥有武器
@@ -461,7 +506,9 @@ func (g *Game) GetAllWeaponDataConfig() map[int32]*gdconf.ItemData {
 	return allWeaponDataConfig
 }
 
-// AddPlayerWeapon 给予玩家武器
+// AddPlayerWeapon 给予玩家武器（GM 命令/抽卡/任务奖励/角色初始武器）
+// 在玩家档中创建 Weapon 对象（默认 1 级 0 突破 0 精炼）+ 通知客户端 StoreItemChangeNotify
+// 返回新创建的 weaponId（雪花GUID） 调用方可用它装备到角色
 func (g *Game) AddPlayerWeapon(userId uint32, itemId uint32) uint64 {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {

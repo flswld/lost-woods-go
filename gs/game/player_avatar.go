@@ -14,9 +14,35 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
+// 角色养成 模块
+//
+// 本文件承载玩家角色（Avatar）的全部养成逻辑：
+//   - 升级（AvatarUpgradeReq）：经验书喂角色 升等级
+//   - 突破（AvatarPromoteReq）：达到等级上限后突破解锁更高等级（消耗突破材料+摩拉）
+//   - 突破奖励（AvatarPromoteGetRewardReq）：每突破到指定档位领取一次性原石/天赋之冠等
+//   - 风之翼（AvatarWearFlycloakReq）+ 装扮（AvatarChangeCostumeReq）
+//   - 天赋升级（AvatarSkillUpgradeReq）：普攻/E/Q 三个技能各自升级（消耗天赋之冠+摩拉）
+//   - 命之座（UnlockAvatarTalentReq）：消耗命星解锁命之座（**激活后实际效果不生效——依赖 ability 系统**）
+//   - HP/能量管理（AddPlayerAvatarHp/SubPlayerAvatarHp/AddPlayerAvatarEnergy/CostPlayerAvatarEnergy）
+//   - 元素切换（ChangePlayerAvatarSkillDepot）：主角七国元素切换（旅行者特有）
+//   - 复活（RevivePlayerAvatar）：死亡角色复活
+//   - 战斗属性更新（UpdatePlayerAvatarFightProp）：基础属性 + 突破属性 + 词条属性 + 天赋加成
+//
+// 关键约束：
+//   - 角色 GUID 是雪花 ID，所有玩家请求都通过 GameObjectGuidMap 反查 Avatar 对象
+//   - 升级摩拉 = 经验书数量 / 5（虽然这是固定比例 但和官服一致）
+//   - 武器精炼/命之座/天赋等的实际效果**没有实现**（详见 CLAUDE.md "Ability 系统现状"）
+//   - 队伍角色升级后会广播 EntityFightPropUpdateNotify 给场景内其他玩家
+
 /************************************************** 接口请求 **************************************************/
 
-// AvatarUpgradeReq 角色升级请求
+// AvatarUpgradeReq 角色升级请求（经验书喂角色）
+//
+// 处理流程：
+//  1. 校验角色存在 + 经验书物品配置 + 摩拉是否足够（摩拉 = 经验数 / 5）
+//  2. 校验角色等级未达突破限制（每个突破阶段有等级上限 如未突破→20级 1突→40级）
+//  3. 一次性扣经验书 + 摩拉
+//  4. 调 AddPlayerAvatarExp 给角色加经验（内部会按等级表升级 + 更新战斗属性）
 func (g *Game) AvatarUpgradeReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.AvatarUpgradeReq)
 	// 是否拥有角色
@@ -86,7 +112,7 @@ func (g *Game) AvatarUpgradeReq(player *model.Player, payloadMsg pb.Message) {
 	}
 
 	// 角色添加经验
-	g.UpgradePlayerAvatar(player, avatar, expCount)
+	g.AddPlayerAvatarExp(player.PlayerId, avatar.AvatarId, expCount)
 
 	avatarUpgradeRsp := &proto.AvatarUpgradeRsp{
 		CurLevel:        uint32(avatar.Level),
@@ -98,7 +124,14 @@ func (g *Game) AvatarUpgradeReq(player *model.Player, payloadMsg pb.Message) {
 	g.SendMsg(cmd.AvatarUpgradeRsp, player.PlayerId, player.ClientSeq, avatarUpgradeRsp)
 }
 
-// AvatarPromoteReq 角色突破请求
+// AvatarPromoteReq 角色突破请求（达到等级上限后解锁更高级数）
+//
+// 处理流程：
+//  1. 校验角色等级达到当前突破阶段的上限（如未突破→20级才能1突）
+//  2. 校验冒险等级达到 MinPlayerLevel（突破有冒险等级要求）
+//  3. 校验突破材料 + 摩拉数量
+//  4. 一次性扣材料 + 摩拉
+//  5. avatar.Promote++ 突破阶段加一 等级保持不变
 func (g *Game) AvatarPromoteReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.AvatarPromoteReq)
 	// 是否拥有角色
@@ -177,10 +210,7 @@ func (g *Game) AvatarPromoteReq(player *model.Player, payloadMsg pb.Message) {
 
 	// 角色突破等级+1
 	avatar.Promote++
-	// 角色更新面板
-	g.UpdatePlayerAvatarFightProp(player.PlayerId, avatar.AvatarId)
-	// 角色属性表更新通知
-	g.SendMsg(cmd.AvatarPropNotify, player.PlayerId, player.ClientSeq, g.PacketAvatarPropNotify(avatar))
+	g.SetPlayerAvatarLevelExpPromote(player.PlayerId, avatar.AvatarId, 0, 0, avatar.Promote)
 
 	avatarPromoteRsp := &proto.AvatarPromoteRsp{
 		Guid: req.Guid,
@@ -339,7 +369,11 @@ func (g *Game) AvatarChangeCostumeReq(player *model.Player, payloadMsg pb.Messag
 	g.SendMsg(cmd.AvatarChangeCostumeRsp, player.PlayerId, player.ClientSeq, rsp)
 }
 
-// AvatarSkillUpgradeReq 角色技能升级请求
+// AvatarSkillUpgradeReq 角色技能升级请求（普攻/E/Q 三个天赋各自升级）
+//
+// 处理：消耗天赋之冠 + 摩拉 → SkillLevelMap[skillId]++ → 广播 AvatarSkillChangeNotify
+// **效果不生效**：技能升级带来的伤害提升通过 ProudSkillData 的 ParamList 表达
+// 但项目 Ability 系统只实现了 6 种 AbilityAction 不解析这些参数 所以技能升级实际不影响伤害
 func (g *Game) AvatarSkillUpgradeReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.AvatarSkillUpgradeReq)
 	world := WORLD_MANAGER.GetWorldById(player.WorldId)
@@ -410,7 +444,11 @@ func (g *Game) AvatarSkillUpgradeReq(player *model.Player, payloadMsg pb.Message
 	g.SendMsg(cmd.AvatarSkillUpgradeRsp, player.PlayerId, player.ClientSeq, rsp)
 }
 
-// UnlockAvatarTalentReq 角色命座解锁请求
+// UnlockAvatarTalentReq 角色命之座解锁请求（消耗命星）
+//
+// 命之座加成（如"E技能附带额外伤害"、"Q释放后回能"）通过 TalentSkillData 的 buff 表达
+// 同样依赖 Ability 系统支持 但项目未实现 → **解锁后实际效果不生效**
+// 仅做了：扣命星 + 加进 avatar.TalentIdList + 广播 AvatarUnlockTalentNotify（让客户端显示已解锁）
 func (g *Game) UnlockAvatarTalentReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.UnlockAvatarTalentReq)
 	world := WORLD_MANAGER.GetWorldById(player.WorldId)
@@ -425,15 +463,15 @@ func (g *Game) UnlockAvatarTalentReq(player *model.Player, payloadMsg pb.Message
 		return
 	}
 
-	// TODO 读TalentSkillData表
-	itemId := uint32(0)
-	if avatar.AvatarId <= 10000099 {
-		itemId = avatar.AvatarId - 10000000 + 1100
-	} else {
-		itemId = avatar.AvatarId - 10000000 + 5000
+	talentSkillDataConfig := gdconf.GetTalentSkillDataById(int32(req.TalentId))
+	if talentSkillDataConfig == nil {
+		logger.Error("get talentSkillDataConfig is nil, talentId: %v", req.TalentId)
+		g.SendError(cmd.UnlockAvatarTalentRsp, player, &proto.UnlockAvatarTalentRsp{})
+		return
 	}
-
-	ok = g.CostPlayerItem(player.PlayerId, []*ChangeItem{{ItemId: itemId, ChangeCount: 1}})
+	ok = g.CostPlayerItem(player.PlayerId, []*ChangeItem{{
+		ItemId:      uint32(talentSkillDataConfig.CostItemId),
+		ChangeCount: uint32(talentSkillDataConfig.CostItemCount)}})
 	if !ok {
 		g.SendError(cmd.UnlockAvatarTalentRsp, player, &proto.UnlockAvatarTalentRsp{})
 		return
@@ -459,7 +497,8 @@ func (g *Game) UnlockAvatarTalentReq(player *model.Player, payloadMsg pb.Message
 
 /************************************************** 游戏功能 **************************************************/
 
-// GetAllAvatarDataConfig 获取所有角色数据配置表
+// GetAllAvatarDataConfig 获取所有可发放的角色数据配置（GM "all_avatar" 用）
+// 跳过 ID <= 10000001（无效）+ ID >= 11000000（无效）+ 主角 10000005/10000007（特殊处理）
 func (g *Game) GetAllAvatarDataConfig() map[int32]*gdconf.AvatarData {
 	allAvatarDataConfig := make(map[int32]*gdconf.AvatarData)
 	for avatarId, avatarData := range gdconf.GetAvatarDataMap() {
@@ -476,21 +515,29 @@ func (g *Game) GetAllAvatarDataConfig() map[int32]*gdconf.AvatarData {
 	return allAvatarDataConfig
 }
 
-// AddPlayerAvatar 给予玩家角色
+// AddPlayerAvatar 添加玩家角色（GM 命令/抽卡获取/任务奖励都走这里）
+//
+// 处理：
+//  1. 已拥有则直接返回（不重复添加）
+//  2. dbAvatar.AddAvatar 在玩家档中创建 Avatar 对象（默认 1 级 0 突破）
+//  3. 自动给角色装备 InitialWeapon（角色配置里的初始武器）
+//  4. UpdatePlayerAvatarFightProp 根据等级/突破/装备计算战斗属性
+//  5. 通知客户端 AvatarAddNotify
+//  6. 当前队伍未满 4 人时 自动加入队伍
 func (g *Game) AddPlayerAvatar(userId uint32, avatarId uint32) {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {
 		logger.Error("player is nil, uid: %v", userId)
 		return
 	}
-	// 判断玩家是否已有该角色
+	// 角色是否已经存在
 	dbAvatar := player.GetDbAvatar()
 	avatar := dbAvatar.GetAvatarById(avatarId)
 	if avatar != nil {
 		return
 	}
+	// 添加角色
 	dbAvatar.AddAvatar(player, avatarId)
-
 	// 添加初始武器
 	avatarDataConfig := gdconf.GetAvatarDataById(int32(avatarId))
 	if avatarDataConfig == nil {
@@ -498,24 +545,57 @@ func (g *Game) AddPlayerAvatar(userId uint32, avatarId uint32) {
 		return
 	}
 	weaponId := g.AddPlayerWeapon(player.PlayerId, uint32(avatarDataConfig.InitialWeapon))
-
 	// 角色装上初始武器
 	g.WearPlayerAvatarWeapon(player.PlayerId, avatarId, weaponId)
-
 	g.UpdatePlayerAvatarFightProp(player.PlayerId, avatarId)
-
-	avatarAddNotify := &proto.AvatarAddNotify{
+	// 通知客户端
+	ntf := &proto.AvatarAddNotify{
 		Avatar:   g.PacketAvatarInfo(dbAvatar.GetAvatarById(avatarId)),
 		IsInTeam: false,
 	}
-	g.SendMsg(cmd.AvatarAddNotify, userId, player.ClientSeq, avatarAddNotify)
-
+	g.SendMsg(cmd.AvatarAddNotify, userId, player.ClientSeq, ntf)
+	// 加入队伍
 	dbTeam := player.GetDbTeam()
 	if len(dbTeam.GetActiveTeam().GetAvatarIdList()) >= 4 {
 		return
 	}
 	activeTeam := dbTeam.GetActiveTeam()
 	g.ChangeTeam(player, uint32(dbTeam.GetActiveTeamId()), append(activeTeam.GetAvatarIdList(), avatarId), dbTeam.GetActiveAvatarId())
+}
+
+// DelPlayerAvatar 删除玩家角色
+func (g *Game) DelPlayerAvatar(userId uint32, avatarId uint32) {
+	if avatarId == 10000005 || avatarId == 10000007 {
+		// 主角不能删除
+		return
+	}
+	player := USER_MANAGER.GetOnlineUser(userId)
+	if player == nil {
+		logger.Error("player is nil, uid: %v", userId)
+		return
+	}
+	// 角色是否存在
+	dbAvatar := player.GetDbAvatar()
+	avatar := dbAvatar.GetAvatarById(avatarId)
+	if avatar == nil {
+		return
+	}
+	// 队伍中的角色不能删除
+	dbTeam := player.GetDbTeam()
+	for _, team := range dbTeam.GetTeamList() {
+		for _, v := range team.GetAvatarIdList() {
+			if avatarId == v {
+				return
+			}
+		}
+	}
+	// 删除角色
+	dbAvatar.DelAvatar(player, avatarId)
+	// 通知客户端
+	ntf := &proto.AvatarDelNotify{
+		AvatarGuidList: []uint64{avatar.Guid},
+	}
+	g.SendMsg(cmd.AvatarDelNotify, userId, player.ClientSeq, ntf)
 }
 
 // AddPlayerFlycloak 给予玩家风之翼
@@ -562,8 +642,15 @@ func (g *Game) AddPlayerCostume(userId uint32, costumeId uint32) {
 	g.SendMsg(cmd.AvatarGainCostumeNotify, userId, player.ClientSeq, avatarGainCostumeNotify)
 }
 
-// UpgradePlayerAvatar 玩家角色升级
-func (g *Game) UpgradePlayerAvatar(player *model.Player, avatar *model.Avatar, expCount uint32) {
+// AddPlayerAvatarExp 增加玩家角色经验
+func (g *Game) AddPlayerAvatarExp(userId uint32, avatarId uint32, exp uint32) {
+	player := USER_MANAGER.GetOnlineUser(userId)
+	if player == nil {
+		logger.Error("player is nil, uid: %v", userId)
+		return
+	}
+	dbAvatar := player.GetDbAvatar()
+	avatar := dbAvatar.GetAvatarById(avatarId)
 	// 获取角色配置表
 	avatarDataConfig := gdconf.GetAvatarDataById(int32(avatar.AvatarId))
 	if avatarDataConfig == nil {
@@ -577,38 +664,90 @@ func (g *Game) UpgradePlayerAvatar(player *model.Player, avatar *model.Avatar, e
 		return
 	}
 	// 角色增加经验
-	avatar.Exp += expCount
+	newExp := avatar.Exp
+	newLevel := avatar.Level
+	newExp += exp
 	// 角色升级
 	for i := 0; i < 1000; i++ {
 		// 获取角色等级配置表
-		avatarLevelConfig := gdconf.GetAvatarLevelDataByLevel(int32(avatar.Level))
+		avatarLevelConfig := gdconf.GetAvatarLevelDataByLevel(int32(newLevel))
 		if avatarLevelConfig == nil {
 			// 获取不到代表已经到达最大等级
 			break
 		}
 		// 角色当前等级未突破则跳出循环
-		if avatar.Level >= uint8(avatarPromoteConfig.LevelLimit) {
+		if newLevel >= uint8(avatarPromoteConfig.LevelLimit) {
 			// 角色未突破溢出的经验处理
-			avatar.Exp = 0
+			newExp = 0
 			break
 		}
 		// 角色经验小于升级所需的经验则跳出循环
-		if avatar.Exp < uint32(avatarLevelConfig.Exp) {
+		if newExp < uint32(avatarLevelConfig.Exp) {
 			break
 		}
 		// 角色等级提升
-		avatar.Exp -= uint32(avatarLevelConfig.Exp)
-		avatar.Level++
+		newExp -= uint32(avatarLevelConfig.Exp)
+		newLevel++
+	}
+	g.SetPlayerAvatarLevelExpPromote(player.PlayerId, avatar.AvatarId, newLevel, newExp)
+}
+
+// SetPlayerAvatarLevelExpPromote 设置玩家角色等级经验突破
+func (g *Game) SetPlayerAvatarLevelExpPromote(userId uint32, avatarId uint32, level uint8, exp uint32, promote ...uint8) {
+	player := USER_MANAGER.GetOnlineUser(userId)
+	if player == nil {
+		logger.Error("player is nil, uid: %v", userId)
+		return
+	}
+	dbAvatar := player.GetDbAvatar()
+	avatar := dbAvatar.GetAvatarById(avatarId)
+	avatarDataConfig := gdconf.GetAvatarDataById(int32(avatar.AvatarId))
+	if avatarDataConfig == nil {
+		logger.Error("avatar config error, avatarId: %v", avatar.AvatarId)
+		return
+	}
+	if len(promote) == 0 {
+		avatar.Level = level
+		avatar.Exp = exp
+		promoteLevel := int32(0)
+		for i := 0; i < 1000; i++ {
+			avatarPromoteConfig := gdconf.GetAvatarPromoteDataByIdAndLevel(avatarDataConfig.PromoteId, promoteLevel)
+			if avatarPromoteConfig == nil {
+				break
+			}
+			avatar.Promote = uint8(avatarPromoteConfig.PromoteLevel)
+			if avatar.Level <= uint8(avatarPromoteConfig.LevelLimit) {
+				break
+			}
+			promoteLevel++
+		}
+	} else {
+		avatar.Promote = promote[0]
+		avatarPromoteConfig := gdconf.GetAvatarPromoteDataByIdAndLevel(avatarDataConfig.PromoteId, int32(avatar.Promote))
+		if avatarPromoteConfig == nil {
+			logger.Error("avatar promote config error, promoteLevel: %v", avatar.Promote)
+			return
+		}
+		avatar.Level = uint8(avatarPromoteConfig.LevelLimit)
+		avatar.Exp = 0
 	}
 	// 角色更新面板
 	g.UpdatePlayerAvatarFightProp(player.PlayerId, avatar.AvatarId)
 	// 角色属性表更新通知
 	g.SendMsg(cmd.AvatarPropNotify, player.PlayerId, player.ClientSeq, g.PacketAvatarPropNotify(avatar))
-
 	g.AddPlayerAvatarHp(player.PlayerId, avatar.AvatarId, 0.0, 1.0, proto.ChangHpReason_CHANGE_HP_ADD_UPGRADE)
 }
 
-// UpdatePlayerAvatarFightProp 更新玩家角色战斗属性
+// UpdatePlayerAvatarFightProp 重新计算并下发玩家角色战斗属性
+//
+// 调用时机：升级/突破/穿装备/换天赋/换主角元素 等所有影响角色面板属性的事件
+// 流程：
+//  1. dbAvatar.UpdateAvatarFightProp 计算 = 基础属性（角色等级表）+ 突破属性 + 武器主词条 + 圣遗物词条
+//     注意：天赋/命之座/精炼/套装效果 等需要 Ability 系统支持的部分**不在此计算**
+//  2. NoCd 标志（GM "nocd" 命令）：技能冷却减免 100%（实战测试用）
+//  3. 计算属性变化 diff 通过 EntityFightPropUpdateNotify 广播给场景内所有玩家
+//
+// AI 世界跳过：PUBG 玩法不需要面板属性 简化为固定值
 func (g *Game) UpdatePlayerAvatarFightProp(userId uint32, avatarId uint32) {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {
@@ -651,7 +790,18 @@ func (g *Game) UpdatePlayerAvatarFightProp(userId uint32, avatarId uint32) {
 	g.EntityFightPropUpdateNotifyBroadcast(scene, entity, updateFightPropMap)
 }
 
-// ChangePlayerAvatarSkillDepot 改变角色技能库
+// ChangePlayerAvatarSkillDepot 切换角色的 SkillDepot（技能库 决定使用哪种元素）
+//
+// 主要用于**主角七国元素切换**：旅行者每到一个国家可切换为对应元素
+//   - 蒙德 → 风元素 → SkillDepot 504
+//   - 璃月 → 岩元素 → SkillDepot 506
+//   - 稻妻 → 雷元素 → SkillDepot 507
+//   - ... 须弥/枫丹/纳塔/至冬
+//
+// 处理：
+//  1. changeSkillDepotId=0 时按 elementType 自动查找对应的 SkillDepot
+//  2. 修改 avatar.SkillDepotId + 重置元素能量条（按新元素的 MaxEnergy）
+//  3. 广播 AvatarSkillDepotChangeNotify + AbilityChangeNotify（重新初始化能力）
 func (g *Game) ChangePlayerAvatarSkillDepot(userId uint32, avatarId uint32, changeSkillDepotId uint32, elementType int) {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {
@@ -725,7 +875,9 @@ func (g *Game) ChangePlayerAvatarSkillDepot(userId uint32, avatarId uint32, chan
 	})
 }
 
-// AddPlayerAvatarHp 角色加血
+// AddPlayerAvatarHp 角色加血 value=固定值 percent=按最大HP百分比（二选一）
+// 与 SubEntityHp 的角色分支一致 单独写这个函数是因为加血逻辑稍有差异（无需触发HpDrop）
+// 上限不超过 MAX_HP；变更后通过 EntityFightPropUpdateNotify 广播
 func (g *Game) AddPlayerAvatarHp(userId uint32, avatarId uint32, value float32, percent float32, reason proto.ChangHpReason) {
 	if value == 0.0 && percent == 0.0 {
 		return
@@ -860,7 +1012,9 @@ func (g *Game) GetPlayerDieTypeByChangHpReason(reason proto.ChangHpReason) proto
 	return dieType
 }
 
-// AddPlayerAvatarEnergy 角色恢复元素能量
+// AddPlayerAvatarEnergy 角色恢复元素能量（攻击/拾取元素球时调用）
+// max=true 直接充满；max=false 加 value（不超过 MaxEnergy）
+// 元素类型决定 EnergyProp 索引（火/水/雷/冰/风/岩/草 各对应不同的 FIGHT_PROP_*_ENERGY）
 func (g *Game) AddPlayerAvatarEnergy(userId uint32, avatarId uint32, value float32, max bool) {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {
@@ -905,7 +1059,9 @@ func (g *Game) AddPlayerAvatarEnergy(userId uint32, avatarId uint32, value float
 	})
 }
 
-// CostPlayerAvatarEnergy 角色消耗元素能量
+// CostPlayerAvatarEnergy 角色消耗元素能量（释放Q大招时调用）
+// EnergyInf（GM "energyinf" 命令）：无限能量模式 直接跳过扣能
+// max=true 清空能量（释放完整大招）；max=false 扣 value
 func (g *Game) CostPlayerAvatarEnergy(userId uint32, avatarId uint32, value float32, max bool) {
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {
@@ -953,7 +1109,9 @@ func (g *Game) CostPlayerAvatarEnergy(userId uint32, avatarId uint32, value floa
 	})
 }
 
-// RevivePlayerAvatar 复活玩家活跃角色实体
+// RevivePlayerAvatar 复活玩家死亡角色（消耗复苏材料/七天神像复活/秘境失败复活等）
+// 仅在 LifeState=DEAD 时执行：恢复 LifeState=ALIVE + 广播状态变更 + 回 35% 最大HP
+// AI 世界（PUBG）的死亡复活走 ReLoginPlayer 不走这个函数（重新进 AI 世界等于重生）
 func (g *Game) RevivePlayerAvatar(player *model.Player, avatarId uint32) {
 	world := WORLD_MANAGER.GetWorldById(player.WorldId)
 	if world == nil {

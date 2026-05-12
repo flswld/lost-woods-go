@@ -12,9 +12,33 @@ import (
 	pb "google.golang.org/protobuf/proto"
 )
 
+// 载具 模块（浪船）
+//
+// 原神 3.2 版本只有"浪船"一种载具（VehicleId=45001 之类） 后续版本陆续加了海祇岛/枫丹的新载具
+// 本项目按"通用载具"实现 数据结构 GadgetVehicleEntity 兼容多种载具
+//
+// 主要请求：
+//   - CreateVehicleReq: 玩家点浪船锚点召唤载具（5 秒冷却）
+//   - VehicleInteractReq: 进入/离开载具（按 InteractType 分支）
+//
+// 关键状态：
+//   - player.VehicleInfo.CreateEntityIdMap: 玩家创建的载具实体集合（每种载具1个）
+//   - player.VehicleInfo.InVehicleEntityId: 玩家当前所在载具（0=不在载具中）
+//   - GadgetVehicleEntity.MemberMap: 载具上的成员位置 → uid 映射（多人坐船用）
+//
+// 载具配置：每种载具 GadgetData → JsonName → GadgetJsonConfig.Vehicle 含座位数/耐力配置等
+
 /************************************************** 接口请求 **************************************************/
 
-// CreateVehicleReq 创建载具
+// CreateVehicleReq 创建载具请求（玩家点浪船锚点召唤）
+//
+// 处理：
+//  1. 5 秒冷却（LastCreateTime 校验 防刷）
+//  2. 已有同类型载具 → 先销毁旧的
+//  3. 创建 GadgetVehicleEntity + 广播 SceneEntityAppearNotify
+//  4. 记录 player.VehicleInfo.CreateEntityIdMap[vehicleId] = entityId
+//
+// TODO 未实现的检查：浪船锚点是否解锁 + 创建位置是否有效（湖面/海面）
 func (g *Game) CreateVehicleReq(player *model.Player, payloadMsg pb.Message) {
 	req := payloadMsg.(*proto.CreateVehicleReq)
 
@@ -169,7 +193,15 @@ func (g *Game) DestroyVehicleEntity(player *model.Player, scene *Scene, gadgetId
 	delete(player.VehicleInfo.CreateEntityIdMap, gadgetId)
 }
 
-// EnterVehicle 进入载具
+// EnterVehicle 玩家进入载具
+//
+// 处理：
+//  1. 校验载具未满（按 GadgetJsonConfig.Vehicle.MaxSeatCount）
+//  2. 找空闲座位（uid=0 的位置）记录 MemberMap[pos] = playerId
+//  3. 设置 player.VehicleInfo.InVehicleEntityId
+//  4. 通知客户端 VehicleInteractRsp 携带 freePos（多人坐船时显示具体位置）
+//
+// 多人坐船：浪船 4 人 但目前只有房主能驾驶 其他玩家是乘客
 func (g *Game) EnterVehicle(player *model.Player, entity IEntity, avatarGuid uint64) {
 	gadgetVehicleEntity, ok := entity.(*GadgetVehicleEntity)
 	if !ok {
@@ -193,15 +225,19 @@ func (g *Game) EnterVehicle(player *model.Player, entity IEntity, avatarGuid uin
 		return
 	}
 
-	// 找出载具空闲的位置
+	// 找出载具空闲的位置（首个空位即占据 不能继续把玩家塞进剩余所有空座）
 	var freePos uint32
 	for i := uint32(0); i < uint32(maxSlot); i++ {
 		uid := gadgetVehicleEntity.GetMemberMap()[i]
-		// 玩家如果已进入载具重复记录不进行报错
-		if uid == player.PlayerId || uid == 0 {
-			// 载具成员记录玩家
+		if uid == player.PlayerId {
+			// 玩家如果已进入载具复用原座位不报错
+			freePos = i
+			break
+		}
+		if uid == 0 {
 			gadgetVehicleEntity.GetMemberMap()[i] = player.PlayerId
 			freePos = i
+			break
 		}
 	}
 
@@ -233,13 +269,14 @@ func (g *Game) ExitVehicle(player *model.Player, entity IEntity, avatarGuid uint
 		g.SendError(cmd.VehicleInteractRsp, player, &proto.VehicleInteractRsp{}, proto.Retcode_RET_NOT_IN_VEHICLE)
 		return
 	}
-	// 载具成员删除玩家
+	// 载具成员删除玩家（找到第一个匹配座位即可 不要遍历所有 key）
 	var memberPos uint32
 	memberMap := gadgetVehicleEntity.GetMemberMap()
 	for pos, uid := range memberMap {
 		if uid == player.PlayerId {
 			memberPos = pos
 			delete(memberMap, pos)
+			break
 		}
 	}
 	// 清除记录的所在载具信息

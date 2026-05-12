@@ -6,11 +6,44 @@ import (
 	"fmt"
 )
 
+// Ec2b 原神客户端的密钥派生算法 - 用于 KCP 通信加密
+//
+// **没有 AES 加密**：算法虽然借用了 AES 的 S-box / shift rows / mix cols 等组件
+//
+//	但仅作为"密钥置乱"操作 不是标准 AES 块加密
+//	整个派生链路最终走 XOR + MT19937
+//
+// Ec2b 文件格式（米哈游约定 不能改）：
+//   - 前 4 字节: 魔数 "Ec2b"
+//   - 后 4 字节: key 长度字段（固定 16）
+//   - 16 字节: 主密钥 key
+//   - 4 字节: data 长度字段（固定 2048）
+//   - 2048 字节: 辅助数据块 data
+//
+// 派生流程（init 函数）：
+//  1. keyScramble(key): 用 11 轮"反向 AES 操作 + XOR 魔数表"置乱 key
+//     · 借用 subBytesInv / shiftRowsInv / mixColsInv + aesXorTable + keyXorTable
+//     · 输出仍是 16 字节但与原 key 完全不同
+//  2. getSeed(scrambledKey, data): 把置乱 key 和 data 全部按 8 字节对齐 XOR 折叠
+//     · 起始值 ^0xCEAC3B5A867837AC（魔数）
+//     · 累加异或 16 字节 key + 2048 字节 data 共 ~258 个 uint64
+//     · 输出 64-bit seed
+//  3. SetSeed(seed): 用 seed 种子 MT19937-64 生成 4096 字节"伪随机字节流"
+//     · 这就是最终的 XOR 密钥（temp 字段）
+//
+// 用途：
+//   - dispatch 通过 region 响应下发 ec2b 给客户端（base64 编码）
+//   - 客户端和服务端各自独立用同样算法派生出相同的 XOR 密钥流
+//   - 后续 KCP 通信用此 XOR 密钥流异或加密报文
+//
+// 安全性：seed 是 64 bit 暴力枚举不现实 但 ec2b 文件本身需要保密
+//
+//	（拿到 ec2b 就能解密所有 KCP 通信）
 type Ec2b struct {
-	key  []byte
-	data []byte
-	seed uint64
-	temp []byte
+	key  []byte // 主密钥（16 字节 keyScramble 的输入）
+	data []byte // 辅助数据块（2048 字节 与 scrambledKey 一起 XOR 折叠出 seed）
+	seed uint64 // XOR 折叠出的 64-bit seed（mt19937 种子）
+	temp []byte // 4096 字节伪随机字节流（KCP payload 实际异或加密用）
 }
 
 func LoadEc2bKey(b []byte) (*Ec2b, error) {

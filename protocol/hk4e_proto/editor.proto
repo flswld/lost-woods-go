@@ -1,3 +1,5 @@
+// 编辑器序列化相关协议
+
 syntax = "proto3";
 
 package proto;
@@ -6,13 +8,13 @@ option go_package = "./;proto";
 
 enum SceneSurfaceMaterial {
     Invalid = 0;
-    Grass = 1;
-    Dirt = 2;
-    Rock = 3;
-    Snow = 4;
-    Water = 5;
-    Tile = 6;
-    Sand = 7;
+    Grass = 1; // 草
+    Dirt = 2;  // 土
+    Rock = 3;  // 石头
+    Snow = 4;  // 雪地
+    Water = 5; // 水
+    Tile = 6;  // 瓷砖（主城的地面）
+    Sand = 7;  // 沙
 }
 
 message MapInfo {
