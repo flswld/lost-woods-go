@@ -258,7 +258,7 @@ func (g *Game) PlayerTimeNotify(world *World) {
 	}
 }
 
-// PlayerGameTimeNotify 提瓦特大陆游戏内时间通知（GameTime为分钟数 0-1440）
+// PlayerGameTimeNotify 游戏时间通知（GameTime为玩家总在线时长秒数 客户端 mod 86400 换算成游戏内时间）
 // 影响白天/黑夜、天气、NPC对话分支等
 func (g *Game) PlayerGameTimeNotify(world *World) {
 	for _, player := range world.GetAllPlayer() {

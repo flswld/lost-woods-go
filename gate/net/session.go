@@ -252,7 +252,7 @@ func (c *ConnManager) gameMsgHandle(
 		if protoMsg.CmdId == cmd.PlayerLoginRsp {
 			rsp := protoMsg.PayloadMessage.(*proto.PlayerLoginRsp)
 			if rsp.Retcode == 0 {
-				logger.Debug("session active, sessionId: %v", protoMsg.SessionId)
+				logger.Info("session active, sessionId: %v", protoMsg.SessionId)
 				session.isLogin.Store(true)
 				// 通知GS玩家各个服务器的appid
 				serverMsg := &mq.ServerMsg{
@@ -349,8 +349,8 @@ func (c *ConnManager) serverMsgHandle(
 			GameMsg: gameMsg,
 		})
 	case mq.ServerUserOnlineStateChangeNotify:
-		// 收到GS玩家离线完成通知
-		logger.Debug("global player online state change, uid: %v, online: %v, gs appid: %v",
+		// 收到GS玩家在线状态改变通知
+		logger.Info("global player online state change, uid: %v, online: %v, gs appid: %v",
 			serverMsg.UserId, serverMsg.IsOnline, netMsg.OriginServerAppId)
 		if serverMsg.IsOnline {
 			c.globalGsOnlineMapLock.Lock()
@@ -494,6 +494,10 @@ func (c *ConnManager) doGateLogin(req *proto.GetPlayerTokenReq, session *Session
 		logger.Error("gate conn num limit, uid: %v", uid)
 		return c.loginFailRsp(uid, proto.Retcode_RET_MAX_PLAYER, false, 0)
 	}
+	oldSession := c.GetSessionByUserId(uid)
+	if oldSession != nil && !oldSession.isLogin.Load() {
+		c.closeConnBySessionId(oldSession.sessionId, kcp.EnetServerKick)
+	}
 	c.globalGsOnlineMapLock.RLock()
 	_, exist := c.globalGsOnlineMap[uid]
 	c.globalGsOnlineMapLock.RUnlock()
@@ -517,7 +521,7 @@ func (c *ConnManager) doGateLogin(req *proto.GetPlayerTokenReq, session *Session
 		case <-regFinishNotifyChan:
 			timer.Stop()
 		}
-		oldSession := c.GetSessionByUserId(uid)
+		oldSession = c.GetSessionByUserId(uid)
 		if oldSession != nil {
 			// 本地顶号
 			c.closeConnBySessionId(oldSession.sessionId, kcp.EnetServerRelogin)

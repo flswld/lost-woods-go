@@ -138,7 +138,7 @@ func (t *TickManager) onUserTickMinute(userId uint32, now int64) {
 	}
 	if uint32(now/1000)-player.LastKeepaliveTime > 60 {
 		logger.Error("remove keepalive timeout user, uid: %v", userId)
-		GAME.OnOffline(userId, &ChangeGsInfo{
+		GAME.OnOffline(userId, "", &ChangeGsInfo{
 			IsChangeGs: false,
 		})
 	}

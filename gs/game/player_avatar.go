@@ -779,8 +779,11 @@ func (g *Game) UpdatePlayerAvatarFightProp(userId uint32, avatarId uint32) {
 			updateFightPropMap[propType] = newPropValue
 		}
 	}
-	scene := world.GetSceneById(player.GetSceneId())
 	entityId := world.GetPlayerWorldAvatarEntityId(player, avatar.AvatarId)
+	if entityId == 0 {
+		return
+	}
+	scene := world.GetSceneById(player.GetSceneId())
 	entity := scene.GetEntity(entityId)
 	if entity == nil {
 		logger.Error("get entity is nil, entityId: %v", entityId)
@@ -898,8 +901,11 @@ func (g *Game) AddPlayerAvatarHp(userId uint32, avatarId uint32, value float32, 
 		logger.Error("get world is nil, worldId: %v, uid: %v", player.WorldId, player.PlayerId)
 		return
 	}
-	scene := world.GetSceneById(player.GetSceneId())
 	entityId := world.GetPlayerWorldAvatarEntityId(player, avatarId)
+	if entityId == 0 {
+		return
+	}
+	scene := world.GetSceneById(player.GetSceneId())
 	entity := scene.GetEntity(entityId)
 	if entity == nil {
 		logger.Error("get entity is nil, entityId: %v", entityId)

@@ -97,7 +97,8 @@ type Player struct {
 	NetFreeze             bool                                     `bson:"-" msgpack:"-"` // 客户端网络上下行冻结状态
 	CommandAssignUid      uint32                                   `bson:"-" msgpack:"-"` // 命令指定uid
 	WeatherInfo           *WeatherInfo                             `bson:"-" msgpack:"-"` // 天气信息
-	ClientVersion         int                                      `bson:"-" msgpack:"-"` // 玩家在线的客户端版本
+	ClientVersion         int                                      `bson:"-" msgpack:"-"` // 玩家在线的客户端版本号数字
+	ClientVersionStr      string                                   `bson:"-" msgpack:"-"` // 玩家在线的客户端版本号
 	OfflineClear          bool                                     `bson:"-" msgpack:"-"` // 是否离线时清除账号数据
 	NotSave               bool                                     `bson:"-" msgpack:"-"` // 是否离线回档
 	Speed                 *Vector                                  `bson:"-" msgpack:"-"` // 速度

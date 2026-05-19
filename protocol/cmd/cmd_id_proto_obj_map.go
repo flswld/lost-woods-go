@@ -140,7 +140,7 @@ func (c *CmdProtoMap) registerMessage() {
 	c.regMsg(ChangeGameTimeReq, func() any { return new(proto.ChangeGameTimeReq) })                           // 改变游戏内时间请求
 	c.regMsg(ChangeGameTimeRsp, func() any { return new(proto.ChangeGameTimeRsp) })                           // 改变游戏内时间响应
 	c.regMsg(SceneTimeNotify, func() any { return new(proto.SceneTimeNotify) })                               // 场景时间通知
-	c.regMsg(PlayerGameTimeNotify, func() any { return new(proto.PlayerGameTimeNotify) })                     // 玩家游戏内时间通知
+	c.regMsg(PlayerGameTimeNotify, func() any { return new(proto.PlayerGameTimeNotify) })                     // 玩家游戏时间通知
 	c.regMsg(SceneEntityAppearNotify, func() any { return new(proto.SceneEntityAppearNotify) })               // 场景实体出现通知
 	c.regMsg(SceneEntityDisappearNotify, func() any { return new(proto.SceneEntityDisappearNotify) })         // 场景实体消失通知
 	c.regMsg(SceneAreaWeatherNotify, func() any { return new(proto.SceneAreaWeatherNotify) })                 // 场景天气区域通知

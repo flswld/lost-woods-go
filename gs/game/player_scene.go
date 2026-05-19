@@ -68,7 +68,7 @@ func (g *Game) EnterSceneReadyReq(player *model.Player, payloadMsg pb.Message) {
 		logger.Error("get enter scene context is nil, uid: %v", player.PlayerId)
 		return
 	}
-	logger.Debug("player enter scene ready, ctx: %+v, uid: %v", ctx, player.PlayerId)
+	logger.Info("player enter scene ready, ctx: %+v, uid: %v", ctx, player.PlayerId)
 
 	if world.IsMultiplayerWorld() && world.IsPlayerFirstEnter(player) {
 		playerPreEnterMpNotify := &proto.PlayerPreEnterMpNotify{
@@ -183,7 +183,7 @@ func (g *Game) EnterSceneReadyReq(player *model.Player, payloadMsg pb.Message) {
 //     - PlayerWorldSceneInfoListNotify: 各场景标签和锁定状态
 //     - SceneForceUnlockNotify: 强制解锁场景标志
 //     - HostPlayerNotify: 房主信息
-//     - SceneTimeNotify + PlayerGameTimeNotify: 场景时间和游戏内时间
+//     - SceneTimeNotify + PlayerGameTimeNotify: 场景时间和游戏时间
 //     - PlayerEnterSceneInfoNotify: 队伍实体id + ability控制块
 //  4. 副本（DungeonId != 0）: GCG酒馆初始化 + DungeonWayPointNotify + DungeonDataNotify
 //  5. 复活进场景：全队角色调用 RevivePlayerAvatar
@@ -202,7 +202,7 @@ func (g *Game) SceneInitFinishReq(player *model.Player, payloadMsg pb.Message) {
 		logger.Error("get enter scene context is nil, uid: %v", player.PlayerId)
 		return
 	}
-	logger.Debug("player scene init finish, ctx: %+v, uid: %v", ctx, player.PlayerId)
+	logger.Info("player scene init finish, ctx: %+v, uid: %v", ctx, player.PlayerId)
 
 	scene := world.GetSceneById(player.GetSceneId())
 
@@ -401,7 +401,7 @@ func (g *Game) EnterSceneDoneReq(player *model.Player, payloadMsg pb.Message) {
 		logger.Error("get enter scene context is nil, uid: %v", player.PlayerId)
 		return
 	}
-	logger.Debug("player enter scene done, ctx: %+v, uid: %v", ctx, player.PlayerId)
+	logger.Info("player enter scene done, ctx: %+v, uid: %v", ctx, player.PlayerId)
 
 	scene := world.GetSceneById(player.GetSceneId())
 
@@ -516,7 +516,7 @@ func (g *Game) PostEnterSceneReq(player *model.Player, payloadMsg pb.Message) {
 		logger.Error("get enter scene context is nil, uid: %v", player.PlayerId)
 		return
 	}
-	logger.Debug("player post enter scene, ctx: %+v, uid: %v", ctx, player.PlayerId)
+	logger.Info("player post enter scene, ctx: %+v, uid: %v", ctx, player.PlayerId)
 
 	if world.IsMultiplayerWorld() && world.IsPlayerFirstEnter(player) {
 		guestPostEnterSceneNotify := &proto.GuestPostEnterSceneNotify{

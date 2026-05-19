@@ -236,7 +236,7 @@ func (r *RouteManager) RouteHandle(netMsg *mq.NetMsg) {
 			GAME.ClientRttNotify(connCtrlMsg.UserId, connCtrlMsg.ClientRtt)
 		case mq.UserOfflineNotify:
 			// 玩家断线 走非"跨服切换"分支 即正常下线
-			GAME.OnOffline(connCtrlMsg.UserId, &ChangeGsInfo{
+			GAME.OnOffline(connCtrlMsg.UserId, netMsg.OriginServerAppId, &ChangeGsInfo{
 				IsChangeGs: false,
 			})
 		default:

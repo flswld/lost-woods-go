@@ -346,7 +346,7 @@ func (c *ConnManager) recvHandle(session *Session) {
 			_ = conn.SetReadDeadline(time.Now().Add(time.Second * ConnRecvTimeout))
 			recvLen, err := conn.Read(payload)
 			if err != nil {
-				logger.Debug("exit recv loop, conn read err: %v, sessionId: %v", err, session.sessionId)
+				logger.Info("exit recv loop, conn read err: %v, sessionId: %v", err, session.sessionId)
 				c.closeConn(session, kcp.EnetServerKick)
 				return
 			}
@@ -445,7 +445,7 @@ func (c *ConnManager) sendHandle(session *Session) {
 	for {
 		protoMsg, ok := <-session.sendChan
 		if !ok {
-			logger.Debug("exit send loop, send chan close, sessionId: %v", session.sessionId)
+			logger.Info("exit send loop, send chan close, sessionId: %v", session.sessionId)
 			c.closeConn(session, kcp.EnetServerKick)
 			return
 		}
@@ -570,14 +570,16 @@ func (c *ConnManager) closeConn(session *Session, enetType uint32) {
 		EventMessage: session.conn.RemoteAddr(),
 	}
 	// 通知GS玩家下线
-	connCtrlMsg := new(mq.ConnCtrlMsg)
-	connCtrlMsg.UserId = session.userId
-	c.messageQueue.SendToGs(session.gsServerAppId, &mq.NetMsg{
-		MsgType:     mq.MsgTypeConnCtrl,
-		EventId:     mq.UserOfflineNotify,
-		ConnCtrlMsg: connCtrlMsg,
-	})
-	logger.Info("send to gs user offline, sessionId: %v, uid: %v", session.sessionId, connCtrlMsg.UserId)
+	if session.isLogin.Load() {
+		connCtrlMsg := new(mq.ConnCtrlMsg)
+		connCtrlMsg.UserId = session.userId
+		c.messageQueue.SendToGs(session.gsServerAppId, &mq.NetMsg{
+			MsgType:     mq.MsgTypeConnCtrl,
+			EventId:     mq.UserOfflineNotify,
+			ConnCtrlMsg: connCtrlMsg,
+		})
+		logger.Info("send to gs user offline, sessionId: %v, uid: %v", session.sessionId, connCtrlMsg.UserId)
+	}
 	c.destroySessionChan <- session
 	atomic.AddInt32(&CLIENT_CONN_NUM, -1)
 }

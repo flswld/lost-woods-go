@@ -1,6 +1,7 @@
 package game
 
 import (
+	"strings"
 	"time"
 
 	"hk4e/common/constant"
@@ -183,7 +184,7 @@ func (g *Game) JoinPlayerSceneReq(player *model.Player, payloadMsg pb.Message) {
 			return
 		}
 		// 走玩家在线跨服迁移流程
-		g.OnOffline(player.PlayerId, &ChangeGsInfo{
+		g.OnOffline(player.PlayerId, "", &ChangeGsInfo{
 			IsChangeGs:     true,
 			JoinHostUserId: req.TargetUid,
 		})
@@ -441,6 +442,11 @@ func (g *Game) JoinOtherWorld(player *model.Player, hostPlayer *model.Player) {
 		if WORLD_MANAGER.IsAiWorld(hostWorld) {
 			player.SetPos(&model.Vector{X: 500.0, Y: 900.0, Z: -500.0})
 			player.SetRot(new(model.Vector))
+			// LostWoods
+			if strings.Contains(player.ClientVersionStr, "LostWoods") {
+				player.SetPos(&model.Vector{X: 500.0, Y: 10.0, Z: 500.0})
+				player.SetRot(new(model.Vector))
+			}
 		} else {
 			player.SetPos(hostPlayer.GetPos())
 			player.SetRot(hostPlayer.GetRot())

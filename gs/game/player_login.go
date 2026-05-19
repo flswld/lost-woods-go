@@ -14,6 +14,8 @@ package game
 //   3. 异步保存完成后 LOCAL_EVENT_MANAGER 推 UserOfflineSaveToDbFinish → OfflineUser 真正从内存删除
 
 import (
+	"strings"
+
 	"hk4e/common/constant"
 	"hk4e/common/region"
 	"hk4e/gdconf"
@@ -32,7 +34,7 @@ import (
 func (g *Game) PlayerLoginReq(userId uint32, clientSeq uint32, gateAppId string, payloadMsg pb.Message) {
 	logger.Info("player login req, uid: %v, gateAppId: %v", userId, gateAppId)
 	req := payloadMsg.(*proto.PlayerLoginReq)
-	logger.Debug("login data: %v", req)
+	logger.Info("login data: %v", req)
 	USER_MANAGER.UserLoginLoad(userId, clientSeq, gateAppId, req)
 }
 
@@ -106,6 +108,7 @@ func (g *Game) SetPlayerBornDataReq(player *model.Player, payloadMsg pb.Message)
 // 参数 player 来自DB加载结果：nil 表示新玩家（要 CreatePlayer 注册），非nil 表示老玩家直接上线
 // ok=false 表示加载失败（DB故障/分布式锁失败等），直接给客户端回 LOGIN_INIT_FAIL
 func (g *Game) OnLogin(userId uint32, clientSeq uint32, gateAppId string, player *model.Player, req *proto.PlayerLoginReq, ok bool) {
+	logger.Info("player login, uid: %v, ok: %v", userId, ok)
 	if !ok {
 		g.SendMsgToGate(cmd.PlayerLoginRsp, userId, clientSeq, gateAppId, &proto.PlayerLoginRsp{Retcode: int32(proto.Retcode_RET_LOGIN_INIT_FAIL)})
 		return
@@ -133,6 +136,7 @@ func (g *Game) OnLogin(userId uint32, clientSeq uint32, gateAppId string, player
 	// 解析客户端版本号字符串如"OSRELWin3.2.0_R11611027" → 320，影响EntityId编码方式
 	clientVersion, _ := region.GetClientVersionByName(req.ChecksumClientVersion)
 	player.ClientVersion = clientVersion
+	player.ClientVersionStr = req.ChecksumClientVersion
 
 	// 防呆：sceneId>100 视为非法存档（场景id一般是 3/4/5/...，超过100可能是脏数据），重置到蒙德城出生点
 	if player.GetSceneId() > 100 {
@@ -149,6 +153,12 @@ func (g *Game) OnLogin(userId uint32, clientSeq uint32, gateAppId string, player
 		player.Pos = &model.Vector{X: 2747, Y: 194, Z: -1719}
 		player.Rot = &model.Vector{X: 0, Y: 307, Z: 0}
 		g.AcceptQuest(player, false)
+	}
+
+	// LostWoods
+	if strings.Contains(req.ChecksumClientVersion, "LostWoods") {
+		player.Pos = &model.Vector{X: 500, Y: 10, Z: 500}
+		player.Rot = &model.Vector{X: 0, Y: 0, Z: 0}
 	}
 
 	g.TriggerOpenState(userId)
@@ -213,7 +223,7 @@ func (g *Game) CreatePlayer(userId uint32) *model.Player {
 	player.PropMap = make(map[uint32]uint32)
 	player.OpenStateMap = make(map[uint32]uint32)
 	player.ChatMsgMap = make(map[uint32][]*model.ChatMsg)
-	player.SceneId = 3 // 蒙德城
+	player.SceneId = 3 // 提瓦特
 
 	player.PropMap[constant.PLAYER_PROP_PLAYER_WORLD_LEVEL] = 0
 	player.PropMap[constant.PLAYER_PROP_CUR_PERSIST_STAMINA] = 10000 // 当前体力(实际显示值=值/100=100体力)
@@ -304,13 +314,18 @@ func (g *Game) ServerAppidBindNotify(userId uint32, multiServerAppId string) {
 // 由 ROUTE_MANAGER 在收到 UserOfflineNotify 时调用 也用于跨服迁移（changeGsInfo.IsChangeGs=true）和服务器停服踢人
 // 流程：保存战斗属性 → 移出世界 → 销毁tick → 异步保存档 → 销毁GCG对局
 // 玩家从内存的最终删除发生在异步保存完成后的 OfflineUser 回调
-func (g *Game) OnOffline(userId uint32, changeGsInfo *ChangeGsInfo) {
+func (g *Game) OnOffline(userId uint32, gateAppId string, changeGsInfo *ChangeGsInfo) {
 	logger.Info("player offline, uid: %v", userId)
 	player := USER_MANAGER.GetOnlineUser(userId)
 	if player == nil {
 		logger.Error("player is nil, uid: %v", userId)
 		return
 	}
+	if gateAppId != "" && gateAppId != player.GateAppId {
+		logger.Error("recv user offline notify from other gate server, uid: %v, gateAppId: %v", userId, gateAppId)
+		return
+	}
+	player.NetFreeze = true
 
 	// 把每个角色的当前血量/能量等运行时战斗属性回写到持久化字段（FightPropMap → CurrHP/CurrEnergy）
 	dbAvatar := player.GetDbAvatar()
